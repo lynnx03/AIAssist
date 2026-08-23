@@ -1,0 +1,277 @@
+"""
+build_extra_tables.py
+---------------------
+เพิ่มตาราง "เสริม" เข้า DB ของ chatbot (ต่อยอดจาก build_chatbot_db.py) แบบ idempotent
+รันซ้ำได้เรื่อยๆ — ทุกตารางจะ DROP แล้ว CREATE ใหม่ทุกครั้ง (ไม่กระทบตารางหลักสูตรเดิม)
+
+ครอบคลุม:
+  Phase 1 : grade_scale, rules        <- มาจาก data/extracted_rules/rules_qwen.json
+  Phase 3 : scholarships              <- mock (placeholder ให้แทนที่ด้วยข้อมูลจริงภายหลัง)
+  Phase 4 : students, student_term_gpa<- mock (ต่อ registrar API ภายหลัง)
+
+Usage:
+    python build_extra_tables.py [db_path] [rules_json]
+    # ค่าเริ่มต้น: chatbot_teach_table.db  data/extracted_rules/rules_qwen.json
+"""
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+# บน Windows คอนโซลมักเป็น cp1252 -> print ภาษาไทยแล้ว error; บังคับ stdout เป็น utf-8
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
+
+DEFAULT_DB = "chatbot_teach_table.db"
+DEFAULT_RULES = "data/extracted_rules/rules_qwen.json"
+
+# เกรดที่คิด GPA (มีค่าตัวเลข) — ใช้ตัดสิน is_gpa เวลาตัวเลขในไฟล์อาจ parse ยาก
+GPA_GRADES = {"A", "B+", "B", "C+", "C", "D+", "D", "F"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: grade_scale
+# ---------------------------------------------------------------------------
+def build_grade_scale(cur, rules):
+    """สร้างตาราง grade_scale จาก grading_system.scale
+    เกรดตัวเลข (A..F) -> point = ค่าจริง, is_gpa=1
+    เกรดพิเศษ (I,S,U,T) -> point=NULL, is_gpa=0 (ไม่คิด GPA)"""
+    cur.execute("DROP TABLE IF EXISTS grade_scale")
+    cur.execute("""
+        CREATE TABLE grade_scale (
+            grade  TEXT PRIMARY KEY,
+            point  REAL,        -- ค่าระดับคะแนน (NULL = ไม่คิด GPA)
+            is_gpa INTEGER      -- 1 = นำไปคำนวณ GPA, 0 = ไม่คิด
+        )
+    """)
+    scale = (rules.get("grading_system") or {}).get("scale", {})
+    n = 0
+    for grade, val in scale.items():
+        # ค่าที่เป็นตัวเลขจริง (float/int) = เกรดคิด GPA; ค่าที่เป็น string คำอธิบาย = ไม่คิด
+        if isinstance(val, (int, float)):
+            point, is_gpa = float(val), 1
+        else:
+            point, is_gpa = None, 0
+        cur.execute(
+            "INSERT INTO grade_scale (grade, point, is_gpa) VALUES (?,?,?)",
+            (grade, point, is_gpa),
+        )
+        n += 1
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: rules (flatten หมวดกฎทั้งหมด ยกเว้น grading_system.scale ที่เป็นตัวเลขล้วน)
+# ---------------------------------------------------------------------------
+def _flatten(category, obj, out, subcategory=None):
+    """แปลง nested structure ให้เป็นแถวๆ (category, subcategory, text)
+    - list ของ string  -> แต่ละ item เป็น 1 แถว
+    - dict             -> ลงลึกต่อ โดยใช้ key เป็น subcategory
+    - string/number    -> 1 แถว
+    ข้าม value ที่เป็น None/[] เปล่า"""
+    if obj is None:
+        return
+    if isinstance(obj, str):
+        text = obj.strip()
+        if text:
+            out.append((category, subcategory, text))
+    elif isinstance(obj, (int, float)):
+        out.append((category, subcategory, str(obj)))
+    elif isinstance(obj, list):
+        for item in obj:
+            _flatten(category, item, out, subcategory)
+    elif isinstance(obj, dict):
+        for key, val in obj.items():
+            # ต่อชื่อ subcategory ไปเรื่อยๆ (เช่น honors_criteria.first_class.gpa_min)
+            sub = key if subcategory is None else f"{subcategory}.{key}"
+            _flatten(category, val, out, sub)
+
+
+def build_rules(cur, rules):
+    """flatten ทุกหมวดกฎ (nested) -> ตาราง rules(category, subcategory, text)
+    เพื่อให้ Text-to-SQL ค้นด้วย LIKE ได้ (prose ยาวๆ)
+    grading_system.scale เป็นตัวเลขล้วน (มี grade_scale แยกแล้ว) จึงข้าม"""
+    cur.execute("DROP TABLE IF EXISTS rules")
+    cur.execute("""
+        CREATE TABLE rules (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            category    TEXT NOT NULL,
+            subcategory TEXT,
+            text        TEXT NOT NULL
+        )
+    """)
+    cur.execute("CREATE INDEX idx_rules_category ON rules(category)")
+
+    out = []
+    for category, obj in rules.items():
+        if category == "grading_system":
+            # เก็บทุกอย่างในหมวดเกรด ยกเว้น scale (ตัวเลขล้วน -> อยู่ใน grade_scale แล้ว)
+            gs = dict(obj)
+            gs.pop("scale", None)
+            _flatten(category, gs, out)
+        else:
+            _flatten(category, obj, out)
+
+    cur.executemany(
+        "INSERT INTO rules (category, subcategory, text) VALUES (?,?,?)",
+        out,
+    )
+    return len(out)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: scholarships (mock — placeholder ให้แทนที่ด้วยข้อมูลจริงจากเว็บคณะภายหลัง)
+# ---------------------------------------------------------------------------
+# NOTE: ข้อมูลด้านล่างเป็นตัวอย่างสมมติ (placeholder) เพื่อให้ chatbot มีอะไรตอบทันที
+#       เมื่อได้ข้อมูลทุนจริงจากเว็บคณะ/สถาบัน ให้แก้ลิสต์นี้แล้วรันสคริปต์ใหม่
+MOCK_SCHOLARSHIPS = [
+    ("ทุนเรียนดี คณะ IT", "คณะเทคโนโลยีสารสนเทศ", "20,000 บาท/ปี", 3.50,
+     "GPAX ไม่ต่ำกว่า 3.50 และไม่เคยได้เกรด F", "31 ต.ค.",
+     "ทุนสำหรับนักศึกษาที่มีผลการเรียนดีเด่น พิจารณาต่อปีการศึกษา", "https://www.it.kmitl.ac.th/"),
+    ("ทุนช่วยเหลือนักศึกษาขาดแคลน", "สถาบัน (กองทุนการศึกษา)", "15,000 บาท/ปี", 2.00,
+     "GPAX ไม่ต่ำกว่า 2.00 และครอบครัวมีรายได้น้อย", "30 ก.ย.",
+     "ทุนช่วยเหลือค่าครองชีพสำหรับนักศึกษาที่ขาดแคลนทุนทรัพย์", "https://www.kmitl.ac.th/"),
+    ("ทุนกิจกรรมเด่น", "สโมสรนักศึกษา", "10,000 บาท (ครั้งเดียว)", 2.50,
+     "GPAX ไม่ต่ำกว่า 2.50 และมีผลงานกิจกรรม/จิตอาสาเด่นชัด", "15 พ.ย.",
+     "ทุนสนับสนุนนักศึกษาที่ทำกิจกรรมเพื่อส่วนรวม", "https://www.kmitl.ac.th/"),
+    ("ทุนวิจัยระดับปริญญาตรี", "คณะเทคโนโลยีสารสนเทศ", "30,000 บาท/โครงการ", 3.00,
+     "GPAX ไม่ต่ำกว่า 3.00 และมีอาจารย์ที่ปรึกษาโครงงานวิจัย", "ตลอดปี (rolling)",
+     "ทุนสนับสนุนโครงงานวิจัย/นวัตกรรมของนักศึกษาปริญญาตรี", "https://www.it.kmitl.ac.th/"),
+    ("ทุนศิษย์เก่าสัมพันธ์", "สมาคมศิษย์เก่า", "12,000 บาท/ปี", None,
+     "เปิดกว้างทุกระดับ GPA เน้นความประพฤติดี", "31 ม.ค.",
+     "ทุนจากเครือข่ายศิษย์เก่าเพื่อสนับสนุนรุ่นน้อง", "https://www.kmitl.ac.th/"),
+]
+
+
+def build_scholarships(cur):
+    cur.execute("DROP TABLE IF EXISTS scholarships")
+    cur.execute("""
+        CREATE TABLE scholarships (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL,
+            provider        TEXT,
+            amount          TEXT,        -- เก็บเป็น text เพราะรูปแบบหลากหลาย ('20,000 บาท/ปี')
+            gpa_requirement REAL,        -- NULL = ไม่กำหนดเกณฑ์ GPA
+            eligibility     TEXT,
+            deadline        TEXT,
+            description     TEXT,
+            url             TEXT
+        )
+    """)
+    cur.executemany(
+        "INSERT INTO scholarships (name,provider,amount,gpa_requirement,eligibility,deadline,description,url) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        MOCK_SCHOLARSHIPS,
+    )
+    return len(MOCK_SCHOLARSHIPS)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: students + student_term_gpa (mock — ต่อ registrar API จริงภายหลัง)
+# ---------------------------------------------------------------------------
+# NOTE: ข้อมูลนักศึกษาทั้งหมดเป็น mock สำหรับเดโม Dashboard อาจารย์ที่ปรึกษา
+#       โครงสร้างออกแบบให้ map กับข้อมูลจาก registrar ได้ตรงๆ ภายหลัง
+# fields: (student_id, name, program_code, module, advisor_name, gpax, credits_earned, status)
+MOCK_STUDENTS = [
+    ("64070001", "ธนกร ใจดี",        "IT",   "software",       "ผศ.ดร. สมชาย", 3.82, 96,  "กำลังศึกษา"),
+    ("64070002", "ปิยะพร แสงเพชร",   "IT",   "game",           "ผศ.ดร. สมชาย", 3.15, 90,  "กำลังศึกษา"),
+    ("64070003", "อนุชา มั่นคง",     "IT",   "network",        "ผศ.ดร. สมชาย", 1.78, 78,  "กำลังศึกษา"),
+    ("64070004", "กมลชนก ศรีสุข",    "DSBA", "data_science",   "ผศ.ดร. สมชาย", 3.91, 99,  "กำลังศึกษา"),
+    ("64070005", "ณัฐวุฒิ พงษ์ไพร",  "DSBA", "data_engineering","ผศ.ดร. สมชาย", 0.87, 42,  "กำลังศึกษา"),
+    ("64070006", "สุพรรณี วงศ์ทอง",  "BIT",  None,             "ผศ.ดร. สมชาย", 2.64, 84,  "กำลังศึกษา"),
+    ("64070007", "จิรายุ ตั้งใจ",    "BIT",  None,             "ผศ.ดร. สมชาย", 3.55, 93,  "กำลังศึกษา"),
+    ("64070008", "วรรณพร ทองมา",     "AIT",  None,             "ผศ.ดร. สมชาย", 1.42, 60,  "ภาคทัณฑ์"),
+    ("64070009", "ภาณุพงศ์ เกิดผล",  "AIT",  None,             "ผศ.ดร. สมชาย", 2.98, 87,  "กำลังศึกษา"),
+    ("64070010", "ศิริพร ดวงแก้ว",   "DSBA", "statistical_analysis", "ผศ.ดร. สมชาย", 3.68, 96, "กำลังศึกษา"),
+]
+
+# (student_id, year, semester, gpa) — ไว้ทำกราฟ GPA รายเทอม (ปีที่นี่หมายถึงชั้นปี 1..3)
+MOCK_TERM_GPA = [
+    ("64070001",1,1,3.70),("64070001",1,2,3.85),("64070001",2,1,3.80),("64070001",2,2,3.90),("64070001",3,1,3.86),
+    ("64070003",1,1,2.10),("64070003",1,2,1.90),("64070003",2,1,1.65),("64070003",2,2,1.70),("64070003",3,1,1.55),
+    ("64070005",1,1,1.20),("64070005",1,2,0.95),("64070005",2,1,0.80),("64070005",2,2,0.75),
+    ("64070008",1,1,1.80),("64070008",1,2,1.55),("64070008",2,1,1.30),("64070008",2,2,1.25),
+    ("64070004",1,1,3.85),("64070004",1,2,3.92),("64070004",2,1,3.95),("64070004",2,2,3.88),("64070004",3,1,3.94),
+    ("64070006",1,1,2.40),("64070006",1,2,2.55),("64070006",2,1,2.70),("64070006",2,2,2.75),("64070006",3,1,2.72),
+]
+
+
+def build_students(cur):
+    cur.execute("DROP TABLE IF EXISTS students")
+    cur.execute("""
+        CREATE TABLE students (
+            student_id     TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            program_code   TEXT,       -- IT / DSBA / BIT / AIT
+            module         TEXT,       -- สาย/โมดูล (NULL = ไม่มี)
+            advisor_name   TEXT,
+            gpax           REAL,
+            credits_earned INTEGER,
+            status         TEXT        -- สถานะการลงทะเบียน (mock) — สถานะเสี่ยงคำนวณสดจาก gpax
+        )
+    """)
+    cur.executemany(
+        "INSERT INTO students (student_id,name,program_code,module,advisor_name,gpax,credits_earned,status) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        MOCK_STUDENTS,
+    )
+
+    cur.execute("DROP TABLE IF EXISTS student_term_gpa")
+    cur.execute("""
+        CREATE TABLE student_term_gpa (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL REFERENCES students(student_id),
+            year       INTEGER,     -- ชั้นปี
+            semester   INTEGER,
+            gpa        REAL
+        )
+    """)
+    cur.executemany(
+        "INSERT INTO student_term_gpa (student_id,year,semester,gpa) VALUES (?,?,?,?)",
+        MOCK_TERM_GPA,
+    )
+    return len(MOCK_STUDENTS), len(MOCK_TERM_GPA)
+
+
+# ---------------------------------------------------------------------------
+def main():
+    db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(DEFAULT_DB)
+    rules_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(DEFAULT_RULES)
+
+    if not db_path.exists():
+        sys.exit(f"ไม่พบไฟล์ DB: {db_path} (รัน build_chatbot_db.py ก่อน)")
+    if not rules_path.exists():
+        sys.exit(f"ไม่พบไฟล์กฎ: {rules_path}")
+
+    rules = json.loads(rules_path.read_text(encoding="utf-8"))
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    n_grade = build_grade_scale(cur, rules)
+    n_rules = build_rules(cur, rules)
+    n_schol = build_scholarships(cur)
+    n_stu, n_term = build_students(cur)
+
+    conn.commit()
+
+    print(f"[Phase 1] grade_scale : {n_grade} เกรด")
+    print(f"[Phase 1] rules       : {n_rules} แถว")
+    print(f"[Phase 3] scholarships: {n_schol} ทุน (mock)")
+    print(f"[Phase 4] students    : {n_stu} คน, student_term_gpa: {n_term} แถว (mock)")
+    print("\n--- ตัวอย่าง grade_scale ---")
+    for r in cur.execute("SELECT grade, point, is_gpa FROM grade_scale ORDER BY is_gpa DESC, point DESC"):
+        print(f"  {r[0]:3} point={r[1]}  is_gpa={r[2]}")
+    print("\n--- rules แยกตามหมวด ---")
+    for r in cur.execute("SELECT category, COUNT(*) FROM rules GROUP BY category ORDER BY category"):
+        print(f"  {r[0]:28} {r[1]} แถว")
+
+    conn.close()
+    print(f"\nDone -> {db_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -112,6 +112,11 @@ SCHEMA_NOTES = """\
   programs/courses/academic_plan_courses) → เวลา JOIN ต้องใส่ชื่อตาราง/alias นำหน้าเสมอ
   (เช่น apc.name_th ไม่ใช่ name_th เฉยๆ) มิฉะนั้นจะ error ambiguous column
 - ภาษากฎระเบียบไทย "ไม่ต่ำกว่า X" หมายถึง >= X (ไม่ใช่ >)
+- **กฎ/ระเบียบ/เกณฑ์** (รีไทร์, ภาคทัณฑ์, เกียรตินิยม, ลงทะเบียน, ลาพัก ฯลฯ) อยู่ในตาราง rules(category, subcategory, text)
+  ค้นด้วย LIKE บน category และ/หรือ text; ตัวเลขในกฎมักเป็น "เลขไทย" (เช่น "ต่ำกว่า ๑.๐๐" ไม่ใช่ 1.00) จึงควร LIKE ด้วยคำไทย
+  เช่น รีไทร์ -> WHERE category='dismissal_criteria' AND text LIKE '%เฉลี่ยสะสม%'; เกียรตินิยม -> text LIKE '%เกียรตินิยม%'
+- **ค่าเกรด** อยู่ในตาราง grade_scale(grade, point, is_gpa): A=4.0,B+=3.5,...,F=0.0 (is_gpa=1); I,S,U,T -> point NULL, is_gpa=0
+- **ทุนการศึกษา** อยู่ในตาราง scholarships(name, provider, amount, gpa_requirement, eligibility, deadline, ...) ค้นเมื่อถามเรื่องทุน
 """
 
 
@@ -231,6 +236,15 @@ FEWSHOT = [
      "JOIN programs p ON p.program_id = apc.program_id "
      "WHERE p.program_code = 'AIT' "
      "AND (apc.name_th LIKE '%สหกิจ%' OR apc.name_en LIKE '%coop%');"),
+    ("เกรด B+ มีค่าเท่าไหร่",
+     "SELECT grade, point FROM grade_scale WHERE grade = 'B+';"),
+    ("GPA เท่าไหร่ถึงจะโดนรีไทร์",
+     "SELECT text FROM rules WHERE category = 'dismissal_criteria' AND text LIKE '%เฉลี่ยสะสม%';"),
+    ("เกียรตินิยมอันดับหนึ่งต้องได้ GPA เท่าไหร่",
+     "SELECT subcategory, text FROM rules "
+     "WHERE category = 'honors_criteria' AND text LIKE '%เกียรตินิยมอันดับหนึ่ง%';"),
+    ("มีทุนอะไรบ้าง",
+     "SELECT name, amount, gpa_requirement, deadline FROM scholarships;"),
 ]
 
 
@@ -239,6 +253,7 @@ def build_system_prompt(schema_desc: str, value_hints: str = "") -> str:
     hints_block = f"\n{value_hints}\n" if value_hints else ""
     return textwrap.dedent(f"""\
     คุณคือผู้ช่วยแปลงคำถามภาษาไทยเป็นคำสั่ง SQLite (SQL) สำหรับฐานข้อมูลหลักสูตรมหาวิทยาลัย
+    (ฐานข้อมูลนี้ครอบคลุมทั้ง หลักสูตร/แผนการเรียน, กฎระเบียบ (ตาราง rules), ค่าเกรด (grade_scale), และทุนการศึกษา (scholarships))
 
     กติกา:
     - ตอบกลับเป็น SQL เพียงคำสั่งเดียวเท่านั้น ห้ามมีคำอธิบาย ห้ามมี markdown ห้ามมี ```
@@ -338,16 +353,47 @@ def _client():
     return OpenAI(base_url=base_url, api_key=api_key)
 
 
-def generate_sql(question: str, system_prompt: str) -> str:
+def _extra_body() -> dict:
+    """คุมการ routing ของ OpenRouter เพื่อให้ผลลัพธ์ "นิ่ง" (deterministic):
+    - LLM_PROVIDER : ล็อกให้ใช้ provider เดียว (เช่น 'Novita' หรือ 'DeepInfra')
+      ตั้ง allow_fallbacks=false เพื่อไม่ให้สลับไป provider อื่น
+      (สาเหตุที่คำตอบเคยไม่นิ่ง: OpenRouter สลับระหว่าง provider ที่ quantization ต่างกัน fp8/bf16)
+    - LLM_SEED     : ใส่ seed (ถ้า provider รองรับ) ช่วยให้สุ่มซ้ำแบบเดิม
+    ถ้าไม่ตั้ง env เหล่านี้ ก็ทำงานเหมือนเดิม (ไม่ล็อก)"""
+    body = {}
+    provider = os.environ.get("LLM_PROVIDER", "").strip()
+    if provider:
+        body["provider"] = {"order": [provider], "allow_fallbacks": False}
+    seed = os.environ.get("LLM_SEED", "").strip()
+    if seed:
+        try:
+            body["seed"] = int(seed)
+        except ValueError:
+            pass
+    return body
+
+
+def generate_sql(question: str, system_prompt: str, force: bool = False) -> str:
+    """เขียน SQL จากคำถาม.
+    force=True ใช้ตอน "ลองใหม่" เมื่อรอบแรกตอบ NO_ANSWER แบบพลาดๆ (เพราะ LLM ฝั่ง
+    provider มี nondeterminism ตอบ NO_ANSWER มั่วเป็นบางครั้ง แม้คำถามตอบได้จริง) —
+    จะย้ำว่าห้าม NO_ANSWER + เพิ่ม temperature เล็กน้อยให้ลองเส้นทางอื่น"""
     client = _client()
     model = os.environ.get("LLM_MODEL", "qwen/qwen-2.5-72b-instruct")
+    user = f"คำถาม: {question}\nSQL:"
+    if force:
+        user = (f"คำถาม: {question}\n"
+                "คำถามนี้ตอบได้จากตารางในฐานข้อมูลแน่นอน ห้ามตอบ SELECT 'NO_ANSWER' "
+                "ให้เลือกตารางที่เกี่ยวข้อง (programs/courses/academic_plan_courses/rules/"
+                "grade_scale/scholarships) แล้วเขียน SELECT ที่เหมาะสม\nSQL:")
     resp = client.chat.completions.create(
         model=model,
-        temperature=0,
+        temperature=0.2 if force else 0,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"คำถาม: {question}\nSQL:"},
+            {"role": "user", "content": user},
         ],
+        extra_body=_extra_body(),
     )
     return resp.choices[0].message.content.strip()
 
@@ -366,6 +412,7 @@ def phrase_answer(question: str, sql: str, cols, rows) -> str:
             {"role": "user", "content":
                 f"คำถาม: {question}\nSQL ที่ใช้: {sql}\nผลลัพธ์ (JSON): {data}\n\nช่วยเรียบเรียงคำตอบ:"},
         ],
+        extra_body=_extra_body(),
     )
     return resp.choices[0].message.content.strip()
 

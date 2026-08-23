@@ -2,76 +2,149 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
-<title>UniAssist Text-to-SQL — หน้าทดสอบ</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniAssist — ผู้ช่วยนักศึกษา KMITL</title>
 <style>
+  :root {
+    --navy: #15457A;
+    --navy-dark: #0f3560;
+    --orange: #E8762C;
+    --orange-dark: #cf6420;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #e2e6ec;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --green: #1a9d54;
+    --amber: #E8762C;
+    --red: #d63b3b;
+  }
+  * { box-sizing: border-box; }
   body {
-    font-family: "Segoe UI", Tahoma, sans-serif;
-    max-width: 900px;
-    margin: 24px auto;
-    padding: 0 16px;
-    color: #222;
-    background: #fafafa;
+    font-family: "Segoe UI", Tahoma, "Sarabun", sans-serif;
+    margin: 0;
+    color: var(--text);
+    background: var(--bg);
   }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .sub { color: #666; margin-bottom: 20px; font-size: 13px; }
-  textarea {
+  header {
+    background: var(--navy);
+    color: white;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header .logo {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: var(--orange);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 18px;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .tag { font-size: 12px; opacity: .8; margin-left: auto; }
+  nav.tabs {
+    background: var(--navy-dark);
+    display: flex;
+    padding: 0 12px;
+    gap: 2px;
+    overflow-x: auto;
+  }
+  nav.tabs button {
+    background: transparent;
+    color: #cdd7e4;
+    border: none;
+    padding: 12px 18px;
+    font-size: 14px;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    white-space: nowrap;
+  }
+  nav.tabs button:hover { color: white; }
+  nav.tabs button.active {
+    color: white;
+    border-bottom-color: var(--orange);
+    font-weight: 600;
+  }
+  main { max-width: 960px; margin: 22px auto; padding: 0 16px; }
+  .tabpage { display: none; }
+  .tabpage.active { display: block; }
+  h2.page-title { font-size: 20px; color: var(--navy); margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+
+  textarea, input[type=text] {
     width: 100%;
-    box-sizing: border-box;
+    font-family: inherit;
     font-size: 15px;
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
     resize: vertical;
+    background: white;
   }
-  .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-  button {
-    padding: 8px 18px;
+  .btn {
+    padding: 9px 20px;
     font-size: 14px;
     border: none;
-    border-radius: 6px;
-    background: #2563eb;
+    border-radius: 8px;
+    background: var(--navy);
     color: white;
     cursor: pointer;
+    font-family: inherit;
   }
-  button:hover { background: #1d4ed8; }
-  button:disabled { background: #999; cursor: default; }
+  .btn:hover { background: var(--navy-dark); }
+  .btn:disabled { background: #9aa5b1; cursor: default; }
+  .btn.orange { background: var(--orange); }
+  .btn.orange:hover { background: var(--orange-dark); }
+  .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
   .examples { margin-top: 10px; }
   .examples button {
-    background: #eef2ff;
-    color: #333;
-    border: 1px solid #c7d2fe;
+    background: #eef3f9;
+    color: var(--navy);
+    border: 1px solid #d3e0ee;
     font-size: 12px;
     padding: 5px 10px;
     margin: 3px 4px 0 0;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
   }
-  .examples button:hover { background: #dbeafe; }
-  .status { margin-top: 10px; color: #666; font-style: italic; }
+  .examples button:hover { background: #dfeaf6; }
+  .status { margin-top: 12px; color: var(--muted); font-style: italic; }
   .section {
-    margin-top: 20px;
+    margin-top: 18px;
     padding: 14px 16px;
-    background: white;
-    border: 1px solid #e2e2e2;
-    border-radius: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
   }
-  .section h2 {
-    font-size: 14px;
+  .section h3 {
+    font-size: 13px;
     margin: 0 0 8px 0;
-    color: #555;
+    color: var(--muted);
     text-transform: uppercase;
     letter-spacing: .04em;
   }
-  #answer-box {
-    font-size: 17px;
-    line-height: 1.5;
-  }
-  pre {
-    background: #1e1e2e;
-    color: #d4d4e0;
-    padding: 12px;
+  #answer-box { font-size: 17px; line-height: 1.55; }
+  .timing {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--muted);
+    background: #f0f4f8;
     border-radius: 6px;
+    padding: 6px 10px;
+    display: inline-block;
+  }
+  .timing b { color: var(--navy); font-weight: 600; }
+  pre {
+    background: #14243a;
+    color: #d4dcea;
+    padding: 12px;
+    border-radius: 8px;
     overflow-x: auto;
     font-size: 13px;
     margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   table {
     border-collapse: collapse;
@@ -79,92 +152,174 @@
     font-size: 13px;
     margin-top: 4px;
   }
-  th, td {
-    border: 1px solid #ccc;
-    padding: 6px 10px;
-    text-align: left;
-  }
-  th { background: #f0f0f0; }
-  tr:nth-child(even) { background: #fafafa; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  th { background: #eef3f9; color: var(--navy); }
+  tr:nth-child(even) td { background: #fafbfc; }
   .error-box {
-    background: #fef2f2;
-    border: 1px solid #fca5a5;
-    color: #991b1b;
-    padding: 12px 16px;
-    border-radius: 8px;
-    margin-top: 20px;
+    background: #fef2f2; border: 1px solid #f3b4b4; color: #8f1d1d;
+    padding: 12px 16px; border-radius: 10px; margin-top: 18px;
   }
   .hidden { display: none; }
+  .note {
+    font-size: 12px; color: #8a5a1e; background: #fdf3e7;
+    border: 1px solid #f4d9b8; border-radius: 8px; padding: 8px 12px; margin-bottom: 14px;
+  }
+
+  /* cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill,minmax(240px,1fr)); gap: 12px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; border-top: 3px solid var(--orange);
+  }
+  .card h4 { margin: 0 0 6px; color: var(--navy); font-size: 15px; }
+  .card .amt { color: var(--orange-dark); font-weight: 700; }
+  .card .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  /* dashboard */
+  .summary-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat {
+    flex: 1; min-width: 120px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .stat .num { font-size: 26px; font-weight: 700; }
+  .stat .lbl { font-size: 12px; color: var(--muted); }
+  .pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill.green { background: #e3f6ec; color: var(--green); }
+  .pill.amber { background: #fdf0e3; color: var(--orange-dark); }
+  .pill.red { background: #fdeaea; color: var(--red); }
+  .pill.gray { background: #eef1f5; color: var(--muted); }
+  .clickable { cursor: pointer; }
+  .clickable:hover td { background: #eef3f9; }
 </style>
 </head>
 <body>
 
-<h1>UniAssist Text-to-SQL — หน้าทดสอบ</h1>
-<div class="sub">พิมพ์คำถามภาษาไทย แล้วดูคำตอบ + SQL ที่โมเดลเขียน + ผลลัพธ์ดิบจากฐานข้อมูล</div>
+<header>
+  <div class="logo">U</div>
+  <h1>UniAssist</h1>
+  <span class="tag">ผู้ช่วยนักศึกษา · KMITL (prototype)</span>
+</header>
 
-<textarea id="question" rows="3" placeholder="เช่น หลักสูตร IT จบกี่หน่วยกิต"></textarea>
-<div class="row">
-  <button id="ask-btn">ถาม</button>
-</div>
+<nav class="tabs">
+  <button data-tab="chat" class="active">💬 แชท</button>
+  <button data-tab="gpa">🧮 คำนวณเกรด</button>
+  <button data-tab="scholar">🎓 ทุนการศึกษา</button>
+  <button data-tab="advisor">📊 Dashboard อาจารย์</button>
+</nav>
 
-<div class="examples">
-  <button type="button" class="ex">หลักสูตร IT จบกี่หน่วยกิต</button>
-  <button type="button" class="ex">AIT ไปสหกิจปีไหน</button>
-  <button type="button" class="ex">IT สายเกม ปี 3 เทอม 1 เรียนอะไรบ้าง</button>
-  <button type="button" class="ex">หมวดวิชาศึกษาทั่วไปของ BIT กี่หน่วยกิต</button>
-</div>
+<main>
+  <!-- ===================== TAB: CHAT ===================== -->
+  <section id="tab-chat" class="tabpage active">
+    <h2 class="page-title">แชทถาม-ตอบ</h2>
+    <div class="sub">ถามเรื่องตารางเรียน/แผนการเรียน · กฎระเบียบ · ทุนการศึกษา — ระบบจะเขียน SQL ค้นฐานข้อมูลให้</div>
 
-<div id="status" class="status hidden">กำลังคิด...</div>
+    <textarea id="question" rows="3" placeholder="เช่น หลักสูตร IT จบกี่หน่วยกิต / เกรด B+ มีค่าเท่าไหร่ / มีทุนอะไรบ้าง"></textarea>
+    <div class="row">
+      <button id="ask-btn" class="btn orange">ถาม</button>
+    </div>
 
-<div id="error-section" class="error-box hidden">
-  <strong>เกิดข้อผิดพลาด:</strong>
-  <div id="error-text"></div>
-  <div id="error-sql-wrap" class="hidden" style="margin-top:8px;">
-    <div style="font-size:12px;color:#7f1d1d;margin-bottom:4px;">SQL ที่ใช้:</div>
-    <pre id="error-sql"></pre>
-  </div>
-</div>
+    <div class="examples">
+      <button type="button" class="ex">หลักสูตร IT จบกี่หน่วยกิต</button>
+      <button type="button" class="ex">เกรด B+ มีค่าเท่าไหร่</button>
+      <button type="button" class="ex">GPA เท่าไหร่ถึงโดนรีไทร์</button>
+      <button type="button" class="ex">เกียรตินิยมอันดับหนึ่งต้องได้ GPA เท่าไหร่</button>
+      <button type="button" class="ex">มีทุนอะไรบ้าง</button>
+    </div>
 
-<div id="result" class="hidden">
-  <div class="section">
-    <h2>คำตอบ</h2>
-    <div id="answer-box"></div>
-  </div>
-  <div class="section">
-    <h2>SQL ที่โมเดลเขียน</h2>
-    <pre id="sql-box"></pre>
-  </div>
-  <div class="section">
-    <h2>ผลลัพธ์ดิบ</h2>
-    <div id="table-box"></div>
-  </div>
-</div>
+    <div id="status" class="status hidden">กำลังคิด...</div>
+
+    <div id="error-section" class="error-box hidden">
+      <strong>เกิดข้อผิดพลาด:</strong>
+      <div id="error-text"></div>
+      <div id="error-sql-wrap" class="hidden" style="margin-top:8px;">
+        <div style="font-size:12px;margin-bottom:4px;">SQL ที่ใช้:</div>
+        <pre id="error-sql"></pre>
+      </div>
+    </div>
+
+    <div id="result" class="hidden">
+      <div class="section">
+        <h3>คำตอบ</h3>
+        <div id="answer-box"></div>
+        <div id="timing-box" class="timing hidden"></div>
+      </div>
+      <div class="section">
+        <h3>SQL ที่โมเดลเขียน</h3>
+        <pre id="sql-box"></pre>
+      </div>
+      <div class="section">
+        <h3>ผลลัพธ์ดิบ</h3>
+        <div id="table-box"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TAB: GPA ===================== -->
+  <section id="tab-gpa" class="tabpage">
+    <h2 class="page-title">คำนวณเกรดจาก Transcript</h2>
+    <div class="sub">วางข้อความ transcript ลงกล่อง ระบบจะดึงรายวิชา + คำนวณ GPA (วิชา S/U/T/W ไม่ถูกนับ)</div>
+    <div class="note" id="gpa-note">⚠️ Parser ยังไม่ได้ปรับจูนกับ transcript จริงของ KMITL — ถ้า parse ไม่ครบ ให้แก้/เพิ่มแถวในตารางด้านล่างได้เอง แล้วกด "คำนวณใหม่"</div>
+
+    <textarea id="transcript" rows="8" placeholder="ตัวอย่าง:
+06016101  Fundamental Programming        3  A
+06016102  Discrete Mathematics           3  B+
+90642001  English for Communication      3  S
+06016103  Data Structures                3  C+"></textarea>
+    <div class="row">
+      <button id="parse-btn" class="btn orange">แยกวิชา &amp; คำนวณ</button>
+      <button id="addrow-btn" class="btn" type="button">+ เพิ่มแถว</button>
+    </div>
+
+    <div id="gpa-status" class="status hidden">กำลังคำนวณ...</div>
+    <div id="gpa-error" class="error-box hidden"></div>
+
+    <div id="gpa-result" class="hidden">
+      <div class="section">
+        <h3>รายวิชาที่ดึงได้ (แก้ไขได้)</h3>
+        <div id="gpa-table-wrap"></div>
+        <div class="row">
+          <button id="recalc-btn" class="btn" type="button">คำนวณใหม่จากตาราง</button>
+        </div>
+      </div>
+      <div class="section">
+        <h3>สรุปผล</h3>
+        <div id="gpa-summary"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TAB: SCHOLARSHIPS ===================== -->
+  <section id="tab-scholar" class="tabpage">
+    <h2 class="page-title">ทุนการศึกษา</h2>
+    <div class="sub">รายการทุน (ถามรายละเอียดเพิ่มได้ที่แท็บแชท)</div>
+    <div class="note">ℹ️ ข้อมูลทุนเป็น <b>ตัวอย่าง (placeholder)</b> — แทนที่ด้วยข้อมูลจริงจากเว็บคณะภายหลัง</div>
+    <div id="scholar-status" class="status">กำลังโหลด...</div>
+    <div id="scholar-cards" class="cards"></div>
+  </section>
+
+  <!-- ===================== TAB: ADVISOR DASHBOARD ===================== -->
+  <section id="tab-advisor" class="tabpage">
+    <h2 class="page-title">Dashboard อาจารย์ที่ปรึกษา</h2>
+    <div class="sub">รายชื่อนักศึกษาในความดูแล + สถานะตามเกณฑ์ GPA</div>
+    <div class="note">ℹ️ ข้อมูลนักศึกษาเป็น <b>ตัวอย่าง (mock)</b> สำหรับเดโม — ต่อ registrar API จริงภายหลัง</div>
+    <div id="advisor-status" class="status">กำลังโหลด...</div>
+    <div id="advisor-summary" class="summary-row hidden"></div>
+    <div id="advisor-table-wrap"></div>
+    <div id="advisor-detail" class="section hidden">
+      <h3>GPA รายเทอม — <span id="detail-name"></span></h3>
+      <div id="term-chart"></div>
+    </div>
+  </section>
+</main>
 
 <script>
-const questionEl = document.getElementById('question');
-const askBtn = document.getElementById('ask-btn');
-const statusEl = document.getElementById('status');
-const resultEl = document.getElementById('result');
-const errorSection = document.getElementById('error-section');
-const errorText = document.getElementById('error-text');
-const errorSqlWrap = document.getElementById('error-sql-wrap');
-const errorSql = document.getElementById('error-sql');
-const answerBox = document.getElementById('answer-box');
-const sqlBox = document.getElementById('sql-box');
-const tableBox = document.getElementById('table-box');
-
+// ---------- shared helpers ----------
 function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-
 function renderTable(columns, rows) {
-  if (!columns || columns.length === 0) {
-    return '<em>(ไม่มีผลลัพธ์)</em>';
-  }
-  let html = '<table><thead><tr>';
+  if (!columns || columns.length === 0) return '<em>(ไม่มีผลลัพธ์)</em>';
+  let html = '<div style="overflow-x:auto"><table><thead><tr>';
   for (const c of columns) html += `<th>${escapeHtml(c)}</th>`;
   html += '</tr></thead><tbody>';
   for (const row of rows) {
@@ -175,22 +330,46 @@ function renderTable(columns, rows) {
     }
     html += '</tr>';
   }
-  html += '</tbody></table>';
-  if (rows.length === 0) {
-    html += '<div style="margin-top:6px;color:#777;">(ไม่มีแถวผลลัพธ์)</div>';
-  }
+  html += '</tbody></table></div>';
+  if (rows.length === 0) html += '<div style="margin-top:6px;color:#777;">(ไม่มีแถวผลลัพธ์)</div>';
   return html;
 }
+
+// ---------- tab switching ----------
+const tabButtons = document.querySelectorAll('nav.tabs button');
+let loadedTabs = {};
+tabButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    tabButtons.forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tabpage').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === 'scholar' && !loadedTabs.scholar) { loadScholarships(); loadedTabs.scholar = true; }
+    if (tab === 'advisor' && !loadedTabs.advisor) { loadDashboard(); loadedTabs.advisor = true; }
+  });
+});
+
+// ==================== CHAT ====================
+const questionEl = document.getElementById('question');
+const askBtn = document.getElementById('ask-btn');
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const errorSection = document.getElementById('error-section');
+const errorText = document.getElementById('error-text');
+const errorSqlWrap = document.getElementById('error-sql-wrap');
+const errorSql = document.getElementById('error-sql');
+const answerBox = document.getElementById('answer-box');
+const timingBox = document.getElementById('timing-box');
+const sqlBox = document.getElementById('sql-box');
+const tableBox = document.getElementById('table-box');
 
 async function ask() {
   const question = questionEl.value.trim();
   if (!question) return;
-
   askBtn.disabled = true;
   statusEl.classList.remove('hidden');
   resultEl.classList.add('hidden');
   errorSection.classList.add('hidden');
-
   try {
     const resp = await fetch('/ask', {
       method: 'POST',
@@ -198,20 +377,22 @@ async function ask() {
       body: JSON.stringify({ question }),
     });
     const data = await resp.json();
-
     if (data.error) {
       errorText.textContent = data.error;
-      if (data.sql) {
-        errorSqlWrap.classList.remove('hidden');
-        errorSql.textContent = data.sql;
-      } else {
-        errorSqlWrap.classList.add('hidden');
-      }
+      if (data.sql) { errorSqlWrap.classList.remove('hidden'); errorSql.textContent = data.sql; }
+      else errorSqlWrap.classList.add('hidden');
       errorSection.classList.remove('hidden');
       return;
     }
-
     answerBox.textContent = data.answer || '(ไม่มีคำตอบ)';
+    if (data.timing) {
+      const t = data.timing;
+      timingBox.innerHTML =
+        `⏱ SQL <b>${t.sql}s</b> · query <b>${t.query}s</b> · answer <b>${t.answer}s</b> · รวม <b>${t.total}s</b>`;
+      timingBox.classList.remove('hidden');
+    } else {
+      timingBox.classList.add('hidden');
+    }
     sqlBox.textContent = data.sql || '';
     tableBox.innerHTML = renderTable(data.columns, data.rows);
     resultEl.classList.remove('hidden');
@@ -224,13 +405,9 @@ async function ask() {
     statusEl.classList.add('hidden');
   }
 }
-
 askBtn.addEventListener('click', ask);
 questionEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    ask();
-  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
 });
 document.querySelectorAll('.ex').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -238,7 +415,221 @@ document.querySelectorAll('.ex').forEach(btn => {
     questionEl.focus();
   });
 });
-</script>
 
+// ==================== GPA (Phase 2) ====================
+const GRADE_OPTIONS = ["A","B+","B","C+","C","D+","D","F","S","U","T","I","W"];
+let gpaCourses = [];  // สถานะปัจจุบันของตาราง (แก้ไขได้)
+
+const parseBtn = document.getElementById('parse-btn');
+const recalcBtn = document.getElementById('recalc-btn');
+const addrowBtn = document.getElementById('addrow-btn');
+const gpaStatus = document.getElementById('gpa-status');
+const gpaError = document.getElementById('gpa-error');
+const gpaResult = document.getElementById('gpa-result');
+
+async function gpaRequest(payload) {
+  gpaError.classList.add('hidden');
+  gpaStatus.classList.remove('hidden');
+  try {
+    const resp = await fetch('/calc-gpa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.error) { gpaError.textContent = data.error; gpaError.classList.remove('hidden'); return; }
+    gpaCourses = data.courses || [];
+    renderGpaTable();
+    renderGpaSummary(data);
+    gpaResult.classList.remove('hidden');
+  } catch (e) {
+    gpaError.textContent = 'เชื่อมต่อ server ไม่ได้: ' + e;
+    gpaError.classList.remove('hidden');
+  } finally {
+    gpaStatus.classList.add('hidden');
+  }
+}
+
+function renderGpaTable() {
+  const opts = (sel) => GRADE_OPTIONS.map(g =>
+    `<option${g===sel?' selected':''}>${g}</option>`).join('');
+  let html = '<div style="overflow-x:auto"><table><thead><tr>' +
+    '<th>รหัสวิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th><th>ปี</th><th>เทอม</th><th></th>' +
+    '</tr></thead><tbody>';
+  gpaCourses.forEach((c, i) => {
+    html += `<tr>
+      <td><input type="text" data-i="${i}" data-f="code" value="${escapeHtml(c.code||'')}" style="width:90px"></td>
+      <td><input type="text" data-i="${i}" data-f="name" value="${escapeHtml(c.name||'')}" style="width:180px"></td>
+      <td><input type="text" data-i="${i}" data-f="credits" value="${c.credits==null?'':escapeHtml(c.credits)}" style="width:55px"></td>
+      <td><select data-i="${i}" data-f="grade">${opts(c.grade)}</select></td>
+      <td><input type="text" data-i="${i}" data-f="year" value="${c.year==null?'':escapeHtml(c.year)}" style="width:55px"></td>
+      <td><input type="text" data-i="${i}" data-f="semester" value="${c.semester==null?'':escapeHtml(c.semester)}" style="width:45px"></td>
+      <td><button class="btn" style="padding:2px 8px;background:#d63b3b" data-del="${i}">×</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  const wrap = document.getElementById('gpa-table-wrap');
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('input,select').forEach(el => {
+    el.addEventListener('change', () => {
+      const i = +el.dataset.i, f = el.dataset.f;
+      let v = el.value.trim();
+      if (['credits','year','semester'].includes(f)) v = v === '' ? null : Number(v);
+      gpaCourses[i][f] = v;
+    });
+  });
+  wrap.querySelectorAll('[data-del]').forEach(b => {
+    b.addEventListener('click', () => { gpaCourses.splice(+b.dataset.del,1); renderGpaTable(); });
+  });
+}
+
+function renderGpaSummary(data) {
+  const ov = data.result.overall;
+  const st = data.status;
+  const th = data.thresholds;
+  let html = `<div style="font-size:22px;font-weight:700;color:var(--navy)">GPAX สะสม: ${ov.gpa==null?'—':ov.gpa}
+      <span class="pill ${st.color}" style="margin-left:8px">${st.emoji} ${escapeHtml(st.label)}</span></div>
+    <div class="meta" style="margin-top:4px;color:var(--muted);font-size:13px">
+      นับ ${ov.counted} วิชา · ${ov.gpa_credits} หน่วยกิต (จากทั้งหมด ${ov.total_courses} วิชา)</div>`;
+
+  if (data.result.terms.length) {
+    html += '<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>ปี/เทอม</th><th>GPA เทอม</th><th>หน่วยกิต</th></tr></thead><tbody>';
+    for (const t of data.result.terms) {
+      html += `<tr><td>${t.year==null?'—':escapeHtml(t.year)} / ${t.semester==null?'—':escapeHtml(t.semester)}</td>
+        <td>${t.gpa==null?'—':t.gpa}</td><td>${t.gpa_credits}</td></tr>`;
+    }
+    html += '</tbody></table></div>';
+  }
+
+  if (ov.excluded && ov.excluded.length) {
+    html += '<div class="meta" style="margin-top:10px"><b>วิชาที่ไม่นับใน GPA:</b><ul style="margin:4px 0 0;padding-left:18px">';
+    for (const e of ov.excluded) {
+      html += `<li>${escapeHtml(e.code||'')} ${escapeHtml(e.name||'')} — ${escapeHtml(e.grade||'')} (${escapeHtml(e.reason)})</li>`;
+    }
+    html += '</ul></div>';
+  }
+  html += `<div class="meta" style="margin-top:10px;font-size:11px">
+      เกณฑ์ (จากตาราง rules): รีไทร์ &lt; ${th.retire} · เฝ้าระวัง &lt; ${th.probation} · เกียรตินิยม ≥ ${th.honors}</div>`;
+  document.getElementById('gpa-summary').innerHTML = html;
+}
+
+parseBtn.addEventListener('click', () => {
+  gpaRequest({ transcript: document.getElementById('transcript').value });
+});
+recalcBtn.addEventListener('click', () => { gpaRequest({ courses: gpaCourses }); });
+addrowBtn.addEventListener('click', () => {
+  gpaCourses.push({ code:'', name:'', credits:null, grade:'A', year:null, semester:null });
+  renderGpaTable();
+  gpaResult.classList.remove('hidden');
+});
+
+// ==================== SCHOLARSHIPS (Phase 3 — wired later) ====================
+async function loadScholarships() {
+  const status = document.getElementById('scholar-status');
+  const wrap = document.getElementById('scholar-cards');
+  try {
+    const resp = await fetch('/scholarships');
+    const data = await resp.json();
+    if (data.error) { status.textContent = 'โหลดไม่สำเร็จ: ' + data.error; return; }
+    status.classList.add('hidden');
+    wrap.innerHTML = (data.scholarships || []).map(s => `
+      <div class="card">
+        <h4>${escapeHtml(s.name)}</h4>
+        <div class="amt">${s.amount ? escapeHtml(s.amount) : '—'}</div>
+        <div class="meta">ผู้ให้ทุน: ${escapeHtml(s.provider || '—')}</div>
+        <div class="meta">เกณฑ์ GPA: ${s.gpa_requirement != null ? escapeHtml(s.gpa_requirement) : 'ไม่ระบุ'}</div>
+        <div class="meta">เงื่อนไข: ${escapeHtml(s.eligibility || '—')}</div>
+        <div class="meta">ปิดรับ: ${escapeHtml(s.deadline || '—')}</div>
+      </div>`).join('') || '<em>ยังไม่มีข้อมูลทุน</em>';
+  } catch (e) {
+    status.textContent = 'เชื่อมต่อ server ไม่ได้: ' + e;
+  }
+}
+
+// ==================== DASHBOARD (Phase 4 — wired later) ====================
+async function loadDashboard() {
+  const status = document.getElementById('advisor-status');
+  status.textContent = 'กำลังโหลด...';
+  try {
+    const resp = await fetch('/dashboard-data');
+    const data = await resp.json();
+    if (data.error) { status.textContent = 'โหลดไม่สำเร็จ: ' + data.error; return; }
+    renderDashboard(data);
+    status.classList.add('hidden');
+  } catch (e) {
+    status.textContent = 'เชื่อมต่อ server ไม่ได้: ' + e;
+  }
+}
+let dashTermGpa = {};
+function renderDashboard(data) {
+  dashTermGpa = data.term_gpa || {};
+  const s = data.summary || {};
+  const th = data.thresholds || {};
+
+  // สรุปตัวเลข
+  const summaryEl = document.getElementById('advisor-summary');
+  summaryEl.innerHTML = `
+    <div class="stat"><div class="num" style="color:var(--red)">${s.risk||0}</div><div class="lbl">🔴 เสี่ยงรีไทร์</div></div>
+    <div class="stat"><div class="num" style="color:var(--orange-dark)">${s.watch||0}</div><div class="lbl">🟠 เฝ้าระวัง</div></div>
+    <div class="stat"><div class="num" style="color:var(--green)">${s.honors||0}</div><div class="lbl">🟢 เข้าเกณฑ์เกียรตินิยม</div></div>
+    <div class="stat"><div class="num" style="color:var(--muted)">${s.normal||0}</div><div class="lbl">⚪ ปกติ</div></div>`;
+  summaryEl.classList.remove('hidden');
+
+  // ตารางรายชื่อ
+  let html = '<div class="section"><h3>นักศึกษาในความดูแล (คลิกเพื่อดู GPA รายเทอม)</h3><div style="overflow-x:auto"><table><thead><tr>' +
+    '<th>รหัส</th><th>ชื่อ</th><th>หลักสูตร</th><th>สาย</th><th>GPAX</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>';
+  for (const st of data.students) {
+    const rs = st.risk_status;
+    const hasTerm = dashTermGpa[st.student_id] && dashTermGpa[st.student_id].length;
+    html += `<tr class="${hasTerm?'clickable':''}" data-sid="${st.student_id}" data-name="${escapeHtml(st.name)}">
+      <td>${escapeHtml(st.student_id)}</td>
+      <td>${escapeHtml(st.name)}</td>
+      <td>${escapeHtml(st.program_code||'')}</td>
+      <td>${escapeHtml(st.module||'—')}</td>
+      <td><b>${st.gpax==null?'—':st.gpax}</b></td>
+      <td>${st.credits_earned==null?'—':escapeHtml(st.credits_earned)}</td>
+      <td><span class="pill ${rs.color}">${rs.emoji} ${escapeHtml(rs.label)}</span></td>
+    </tr>`;
+  }
+  html += '</tbody></table></div>';
+  html += `<div class="meta" style="margin-top:8px;font-size:11px">เกณฑ์ (จากตาราง rules): รีไทร์ &lt; ${th.retire} · เฝ้าระวัง &lt; ${th.probation} · เกียรตินิยม ≥ ${th.honors}</div></div>`;
+  document.getElementById('advisor-table-wrap').innerHTML = html;
+
+  document.querySelectorAll('#advisor-table-wrap tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => showTermChart(tr.dataset.sid, tr.dataset.name));
+  });
+}
+
+function showTermChart(sid, name) {
+  const terms = dashTermGpa[sid] || [];
+  const detail = document.getElementById('advisor-detail');
+  document.getElementById('detail-name').textContent = name;
+  if (!terms.length) { detail.classList.add('hidden'); return; }
+
+  // กราฟเส้น GPA รายเทอม (inline SVG, สเกล 0-4)
+  const W = 560, H = 220, padL = 34, padB = 26, padT = 12, padR = 12;
+  const n = terms.length;
+  const x = i => padL + (n===1?0:i*(W-padL-padR)/(n-1));
+  const y = g => padT + (4-g)/4*(H-padT-padB);
+  let grid = '';
+  for (let g=0; g<=4; g++) {
+    grid += `<line x1="${padL}" y1="${y(g)}" x2="${W-padR}" y2="${y(g)}" stroke="#e2e6ec"/>
+             <text x="${padL-6}" y="${y(g)+4}" text-anchor="end" font-size="10" fill="#6b7280">${g}</text>`;
+  }
+  let path = '', dots = '';
+  terms.forEach((t,i) => {
+    path += (i===0?'M':'L') + x(i) + ',' + y(t.gpa) + ' ';
+    dots += `<circle cx="${x(i)}" cy="${y(t.gpa)}" r="3.5" fill="#15457A"/>
+             <text x="${x(i)}" y="${y(t.gpa)-8}" text-anchor="middle" font-size="10" fill="#15457A">${t.gpa}</text>
+             <text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="10" fill="#6b7280">ปี${t.year}/${t.semester}</text>`;
+  });
+  document.getElementById('term-chart').innerHTML =
+    `<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px">
+      ${grid}<path d="${path}" fill="none" stroke="#E8762C" stroke-width="2"/>${dots}
+    </svg></div>`;
+  detail.classList.remove('hidden');
+  detail.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+</script>
 </body>
 </html>
