@@ -21,8 +21,10 @@ from text_to_sql_chatbot import (
     build_column_value_hints,
     build_schema_description,
     build_system_prompt,
+    general_answer,
     generate_sql,
     load_dotenv,
+    looks_like_chat,
     phrase_answer,
     run_query,
     sanitize_sql,
@@ -30,10 +32,12 @@ from text_to_sql_chatbot import (
 from assist_logic import (
     classify_status,
     compute_gpa,
+    is_multicolumn,
     load_grade_points,
     load_thresholds,
     parse_transcript,
 )
+from google_auth import register_auth
 
 ENV_FILE = os.environ.get("ENV_FILE", ".env")
 load_dotenv(ENV_FILE)
@@ -41,6 +45,7 @@ load_dotenv(ENV_FILE)
 DB_PATH = os.environ.get("CHATBOT_DB_PATH", "chatbot_teach_table.db")
 
 app = Flask(__name__)
+register_auth(app)  # ผูก Google OAuth (/auth/login, /auth/callback, /auth/logout, /auth/me)
 
 _system_prompt = None
 
@@ -71,25 +76,45 @@ def ask():
 
         # จับเวลาแต่ละขั้นด้วย perf_counter() (Phase 0) เพื่อโชว์ latency บนหน้าเว็บ
         t0 = time.perf_counter()
-        try:
-            raw_sql = generate_sql(question, system_prompt)
-            sql, err = sanitize_sql(raw_sql)
-            # กันเคส LLM ตอบ NO_ANSWER แบบพลาดๆ (provider nondeterminism) — ลองใหม่ 1 ครั้งแบบย้ำ
-            if err or (sql and "NO_ANSWER" in sql.upper()):
-                raw_retry = generate_sql(question, system_prompt, force=True)
-                sql2, err2 = sanitize_sql(raw_retry)
-                if not err2 and sql2 and "NO_ANSWER" not in sql2.upper():
-                    raw_sql, sql, err = raw_retry, sql2, err2
-        except Exception as e:
-            return jsonify({"error": f"เรียก LLM เขียน SQL ไม่สำเร็จ: {e}"}), 502
-        t_sql = time.perf_counter()
 
+        # ---- ROUTER: ให้โมเดลตัดสินก่อนว่าเป็นคำถามดึงข้อมูล (SQL) หรือคำถามคุย (CHAT) ----
+        try:
+            routed = generate_sql(question, system_prompt)
+        except Exception as e:
+            return jsonify({"error": f"เรียก LLM ไม่สำเร็จ: {e}"}), 502
+        t_route = time.perf_counter()
+
+        def chat_reply(note=""):
+            """โหมดสนทนา — ให้ Qwen ตอบเองแบบ chatbot (ไม่ผูก SQL)"""
+            try:
+                answer = general_answer(question, note=note)
+            except Exception as e:
+                return jsonify({"error": f"ตอบแบบสนทนาไม่สำเร็จ: {e}"}), 502
+            t_ans = time.perf_counter()
+            return jsonify({
+                "answer": answer,
+                "mode": "chat",
+                "timing": {
+                    "route": round(t_route - t0, 3),
+                    "answer": round(t_ans - t_route, 3),
+                    "total": round(t_ans - t0, 3),
+                },
+            })
+
+        # 1) โมเดลส่งต่อโหมดสนทนา (CHAT / ตอบไม่ใช่ SELECT)
+        if looks_like_chat(routed):
+            return chat_reply()
+
+        # 2) โหมดข้อมูล: ตรวจ SQL ให้ปลอดภัยก่อนรัน
+        sql, err = sanitize_sql(routed)
         if err:
-            return jsonify({"error": err, "sql": raw_sql}), 200
+            return chat_reply()  # SQL ไม่ปลอดภัย/ผิดรูป -> ตกไปโหมดสนทนา
 
         cols, rows, qerr = run_query(DB_PATH, sql)
         if qerr:
-            return jsonify({"error": qerr, "sql": sql}), 200
+            # SQL รันไม่ผ่าน -> ตอบแบบสนทนาแทน (ยังบอก sql ไว้ debug)
+            resp = chat_reply(note="ค้นฐานข้อมูลแล้ว SQL มีข้อผิดพลาด เลยตอบจากความรู้ทั่วไปแทน")
+            return resp
         t_query = time.perf_counter()
 
         try:
@@ -99,10 +124,10 @@ def ask():
         t_answer = time.perf_counter()
 
         timing = {
-            "sql": round(t_sql - t0, 3),          # LLM เขียน SQL
-            "query": round(t_query - t_sql, 3),   # รัน query บน DB
+            "sql": round(t_route - t0, 3),           # LLM เขียน SQL (router)
+            "query": round(t_query - t_route, 3),    # รัน query บน DB
             "answer": round(t_answer - t_query, 3),  # LLM เรียบเรียงคำตอบ
-            "total": round(t_answer - t0, 3),     # รวมทั้งหมด
+            "total": round(t_answer - t0, 3),        # รวมทั้งหมด
         }
 
         return jsonify({
@@ -111,6 +136,7 @@ def ask():
             "rows": rows,
             "answer": answer,
             "timing": timing,
+            "mode": "data",
         })
     except Exception as e:
         return jsonify({"error": f"เกิดข้อผิดพลาดที่ไม่คาดคิด: {e}"}), 500
@@ -123,10 +149,13 @@ def calc_gpa():
     ใช้ grade_scale + rules จาก DB เป็น single source of truth"""
     try:
         data = request.get_json(force=True, silent=True) or {}
+        multicolumn = False
         if isinstance(data.get("courses"), list):
-            courses = data["courses"]
+            courses = data["courses"]           # แก้จากตารางแล้วส่งกลับมาคำนวณใหม่
         else:
-            courses = parse_transcript(data.get("transcript") or "")
+            transcript = data.get("transcript") or ""
+            courses = parse_transcript(transcript)
+            multicolumn = is_multicolumn(transcript)
 
         grade_map = load_grade_points(DB_PATH)
         thresholds = load_thresholds(DB_PATH)
@@ -138,6 +167,7 @@ def calc_gpa():
             "result": result,
             "status": status,
             "thresholds": thresholds,
+            "multicolumn": multicolumn,
         })
     except Exception as e:
         return jsonify({"error": f"คำนวณ GPA ไม่สำเร็จ: {e}"}), 500

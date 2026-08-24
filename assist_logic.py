@@ -22,11 +22,31 @@ _THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
 _GRADE_TOKENS = ["A", "B+", "B", "C+", "C", "D+", "D", "F", "S", "U", "T", "I", "W", "WD", "AU"]
 _GRADE_RE = re.compile(r"(?<![A-Za-z+])(" + "|".join(re.escape(g) for g in _GRADE_TOKENS) + r")(?![A-Za-z+])")
 _CODE_RE = re.compile(r"\b(\d{8})\b")                 # รหัสวิชา 8 หลัก
-# หัวข้อภาคเรียน เช่น "ภาคการศึกษาที่ 1/2564", "ปีการศึกษา 2564 ภาค 2", "Semester 1/2021"
-_TERM_RE = re.compile(
-    r"(?:ภาค(?:การศึกษา)?|semester|sem|term)[^\d]{0,6}(\d)\s*[/\-]\s*(\d{2,4})",
-    re.IGNORECASE,
-)
+# ตัวจุดชนวนว่าบรรทัดนี้ "น่าจะเป็นหัวข้อภาคเรียน"
+_TERM_HINT_RE = re.compile(r"semester|ภาค|\(\s*\d\s*/\s*\d{2,4}\s*\)", re.IGNORECASE)
+# บรรทัดต่อชื่อวิชา (title ที่ตัดบรรทัด) เช่น 'SKILLS', 'ENGLISH 1', 'TECHNOLOGY 2'
+# = อักษรลาติน/ตัวเลข/วงเล็บ ล้วนๆ ไม่มี ':' (กัน 'GPS :', 'Total ...:')
+_TITLE_FRAG_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 &/().,\-]*$")
+
+
+def _parse_term(line: str):
+    """คืน (semester, year) จากบรรทัดหัวข้อภาคเรียน หรือ None ถ้าไม่ใช่
+    รองรับหลายรูปแบบ เช่น
+      '1st Semester, Year, 2023-2024 (1/2566)'  -> (1, 2566)
+      'ภาคการศึกษาที่ 1/2564'                     -> (1, 2564)
+      '2nd Semester ... 2024'                    -> (2, 2024)"""
+    if not _TERM_HINT_RE.search(line):
+        return None
+    # แบบ N/YYYY (มักอยู่ในวงเล็บ เช่น (1/2566)) — แม่นสุด เอาก่อน
+    m = re.search(r"(\d)\s*/\s*(\d{2,4})", line)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    sm = re.search(r"(\d)\s*(?:st|nd|rd|th)?\s*semester", line, re.IGNORECASE)
+    ym = re.search(r"(\d{4})", line)
+    if sm or ym:
+        return (int(sm.group(1)) if sm else None,
+                int(ym.group(1)) if ym else None)
+    return None
 
 
 def _thai_to_arabic(s: str) -> str:
@@ -112,77 +132,103 @@ def classify_status(gpax, th: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Transcript parser (ยืดหยุ่น — ยังไม่มีตัวอย่างจริง ต้อง refine regex ภายหลัง)
+# Transcript parser (ปรับจูนกับรูปแบบ transcript จริงของ KMITL ที่ผู้ใช้คัดลอกมาวาง)
 # ---------------------------------------------------------------------------
 def parse_transcript(text: str) -> list:
     """แยกรายวิชาจากข้อความ transcript ที่ paste มา
     คืน list ของ dict: {code, name, credits, grade, year, semester}
 
+    ปรับจูน + ทดสอบแล้วกับ transcript จริงของ KMITL (คัดลอกข้อความมาวาง) รูปแบบ:
+        <รหัส 8 หลัก>  <ชื่อวิชา>  <หน่วยกิต>  <เกรด>
+    หัวข้อภาคเรียนแบบ '1st Semester, Year, 2023-2024 (1/2566)' -> set เทอม (1/2566) ให้วิชาถัดๆ ไป
+
     heuristic ต่อบรรทัด:
       - รหัสวิชา = เลข 8 หลักตัวแรก
-      - เกรด = โทเคนเกรดตัวสุดท้ายในบรรทัด
-      - หน่วยกิต = เลข 1-2 หลักที่อยู่ก่อนเกรด (หรือเลขเดี่ยวหลังรหัส)
-      - ชื่อวิชา = ข้อความระหว่างรหัสกับหน่วยกิต/เกรด
-    หัวข้อภาคเรียน (เช่น 'ภาคการศึกษาที่ 1/2564') จะ set เทอมให้วิชาถัดๆ ไป
-
-    ⚠️ ยังไม่ได้ทดสอบกับ transcript จริงของ KMITL — เมื่อมีตัวอย่างจริงให้ปรับ regex ด้านบน
+      - เกรด = โทเคนเกรดตัวสุดท้ายในบรรทัด (ถ้าไม่มี = วิชากำลังเรียน เก็บ grade=None ไว้แสดง แต่ไม่คิด GPA)
+      - หน่วยกิต = เลขตัวสุดท้ายก่อนเกรด
+      - ชื่อวิชา = ข้อความระหว่างรหัสกับหน่วยกิต + ต่อบรรทัดถัดไปถ้าชื่อถูกตัดขึ้นบรรทัดใหม่
+      - บรรทัดสรุป (GPS/GPA/Total/Cumulative) จะถูกข้าม (ไม่มีรหัสวิชา)
+    หมายเหตุ: per-term ที่ได้ = GPS รายภาค, overall = GPAX สะสม (ตรงกับตัวเลขในทรานสคริปต์จริง)
     """
     courses = []
     cur_year, cur_sem = None, None
+    cont_idx = None   # index ของวิชาล่าสุด (ไว้ต่อชื่อวิชาที่ตัดบรรทัด)
 
     for raw in (text or "").splitlines():
         line = raw.strip()
         if not line:
             continue
 
-        # ตรวจหัวข้อภาคเรียนก่อน (บรรทัดนี้อาจไม่มีรหัสวิชา)
-        tm = _TERM_RE.search(line)
-        if tm and not _CODE_RE.search(line):
-            cur_sem = int(tm.group(1))
-            yr = tm.group(2)
-            cur_year = int(yr) if len(yr) <= 2 else int(yr)  # เก็บปีตามที่พบ (พ.ศ./ค.ศ.)
+        # หา "ทุก" รหัสวิชาในบรรทัด (transcript แบบ 2 คอลัมน์ = 1 บรรทัดมีได้หลายวิชา)
+        codes = list(_CODE_RE.finditer(line))
+
+        # 1) บรรทัดที่ไม่มีรหัสวิชา -> หัวข้อภาคเรียน / ชื่อวิชาต่อ / บรรทัดสรุป
+        if not codes:
+            term = _parse_term(line)
+            if term is not None:
+                cur_sem, cur_year = term
+                cont_idx = None
+                continue
+            # ต่อชื่อวิชาที่ถูกตัดบรรทัด (เช่น 'SKILLS', 'ENGLISH 1') เข้าวิชาก่อนหน้า
+            if cont_idx is not None and ":" not in line and _TITLE_FRAG_RE.match(line):
+                courses[cont_idx]["name"] = (courses[cont_idx]["name"] + " " + line).strip()
+            else:
+                cont_idx = None   # บรรทัดสรุป (GPS/Total/…) -> หยุดต่อชื่อ
             continue
 
-        cm = _CODE_RE.search(line)
-        if not cm:
-            continue
-        code = cm.group(1)
-        after = line[cm.end():]
+        # ข้อความก่อนรหัสแรก อาจเป็นหัวข้อภาคเรียน (คอลัมน์ซ้าย) -> เซ็ตเทอมให้วิชาที่ตามมา
+        prefix = line[:codes[0].start()].strip()
+        if prefix:
+            term = _parse_term(prefix)
+            if term is not None:
+                cur_sem, cur_year = term
 
-        # หาเกรดตัวสุดท้ายในส่วนหลังรหัส
-        grades = list(_GRADE_RE.finditer(after))
-        if not grades:
-            continue
-        gm = grades[-1]
-        grade = gm.group(1)
+        # 2) แยกแต่ละวิชาในบรรทัด: ช่วง [รหัส_i .. รหัส_i+1)
+        for i, cm in enumerate(codes):
+            seg_start = cm.end()
+            seg_end = codes[i + 1].start() if i + 1 < len(codes) else len(line)
+            segment = line[seg_start:seg_end]
 
-        # หน่วยกิต: เลข 1-2 หลักที่อยู่ก่อนเกรด (ใกล้เกรดที่สุด)
-        before_grade = after[:gm.start()]
-        num_matches = re.findall(r"(\d+(?:\.\d+)?)", before_grade)
-        credits = None
-        if num_matches:
-            try:
-                credits = float(num_matches[-1])
-                if credits.is_integer():
-                    credits = int(credits)
-            except ValueError:
-                credits = None
+            grades = list(_GRADE_RE.finditer(segment))
+            gm = grades[-1] if grades else None
+            grade = gm.group(1) if gm else None   # None = กำลังเรียน (ยังไม่มีเกรด)
 
-        # ชื่อวิชา = ข้อความก่อนหน่วยกิต/เกรด (ตัดตัวเลขท้ายออก)
-        name = before_grade
-        if num_matches:
-            name = before_grade[:before_grade.rfind(num_matches[-1])]
-        name = name.strip(" \t.-|")
+            before_grade = segment[:gm.start()] if gm else segment
+            num_matches = re.findall(r"(\d+(?:\.\d+)?)", before_grade)
+            credits = None
+            if num_matches:
+                try:
+                    credits = float(num_matches[-1])
+                    if credits.is_integer():
+                        credits = int(credits)
+                except ValueError:
+                    credits = None
 
-        courses.append({
-            "code": code,
-            "name": name,
-            "credits": credits,
-            "grade": grade,
-            "year": cur_year,
-            "semester": cur_sem,
-        })
+            name = before_grade
+            if num_matches:
+                name = before_grade[:before_grade.rfind(num_matches[-1])]
+            name = name.strip(" \t.-|")
+
+            courses.append({
+                "code": cm.group(1),
+                "name": name,
+                "credits": credits,
+                "grade": grade,
+                "year": cur_year,
+                "semester": cur_sem,
+            })
+        # ต่อชื่อวิชาที่ตัดบรรทัดได้เฉพาะกรณีบรรทัดนี้มีวิชาเดียว (กันต่อผิดคอลัมน์)
+        cont_idx = len(courses) - 1 if len(codes) == 1 else None
     return courses
+
+
+def is_multicolumn(text: str) -> bool:
+    """True ถ้า transcript ดูเป็นแบบ 2 คอลัมน์ (มีบรรทัดที่มีรหัสวิชา >= 2 รหัส)
+    ใช้เตือนผู้ใช้ว่า GPA รายเทอมอาจคลาดเคลื่อน (แต่ GPAX รวมยังถูก)"""
+    for raw in (text or "").splitlines():
+        if len(_CODE_RE.findall(raw)) >= 2:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +263,9 @@ def compute_gpa(courses: list, grade_map: dict) -> dict:
             term_order.append(tk)
 
         # เหตุผลที่ตัดออก
-        if gi is None:
+        if not grade:
+            reason = "ยังไม่มีเกรด (กำลังเรียน)"
+        elif gi is None:
             reason = f"เกรด '{grade}' ไม่รู้จัก"
         elif not gi["is_gpa"]:
             reason = f"เกรด {grade} ไม่คิด GPA"

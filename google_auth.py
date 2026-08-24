@@ -1,0 +1,151 @@
+"""
+google_auth.py
+--------------
+Google OAuth 2.0 (Sign in with Google) สำหรับ UniAssist (Flask)
+พอร์ตมาจากสตาร์ตเตอร์ FastAPI/React -> ปรับให้เข้ากับ Flask + server-side session
+(สะอาดกว่าแบบส่ง JWT ผ่าน URL: เก็บ user ไว้ใน session cookie ที่เซ็นแล้ว)
+
+ต้องตั้งค่าใน .env (อ่านจากฝั่ง server เท่านั้น — ห้ามส่ง secret ไป frontend):
+    GOOGLE_CLIENT_ID=...
+    GOOGLE_CLIENT_SECRET=...
+    GOOGLE_REDIRECT_URI=http://localhost:5000/auth/callback
+    FLASK_SECRET_KEY=<สุ่มยาวๆ>        # ใช้เซ็น session cookie
+
+Endpoints (register ผ่าน register_auth(app)):
+    GET  /auth/login     -> เด้งไปหน้ายินยอมของ Google
+    GET  /auth/callback  -> แลก code -> token -> โปรไฟล์ -> เก็บลง session -> กลับหน้าแรก
+    POST /auth/logout    -> ล้าง session
+    GET  /auth/me        -> คืนข้อมูล user ที่ล็อกอินอยู่ (หรือ null)
+
+ใช้ urllib (stdlib) เรียก Google — ไม่ต้องลง dependency เพิ่ม
+"""
+
+import json
+import os
+import secrets
+import urllib.parse
+import urllib.request
+from functools import wraps
+
+from flask import jsonify, redirect, request, session
+
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+
+def _cfg(name, default=None):
+    return os.environ.get(name, default)
+
+
+def _redirect_uri():
+    # ค่าเริ่มต้นชี้ callback ของ Flask เอง (ต้องตรงกับที่ตั้งใน Google Cloud Console เป๊ะ)
+    return _cfg("GOOGLE_REDIRECT_URI", "http://localhost:5000/auth/callback")
+
+
+def _post_form(url, data):
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode())
+
+
+def _get_json(url, bearer):
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {bearer}"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode())
+
+
+def current_user():
+    """คืน dict ของ user ที่ล็อกอินอยู่ หรือ None"""
+    return session.get("user")
+
+
+def login_required(view):
+    """เดคอเรเตอร์กันเส้นทางที่ต้องล็อกอินก่อน (ยังไม่ได้บังคับใช้กับหน้าไหนเป็นค่าเริ่มต้น
+    — เผื่ออยาก gate เช่น dashboard อาจารย์ ให้เติม @login_required ได้)"""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not current_user():
+            return jsonify({"error": "ต้องเข้าสู่ระบบก่อน"}), 401
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def register_auth(app):
+    """ผูก session secret + endpoints /auth/* เข้ากับ Flask app"""
+    # secret key สำหรับเซ็น session cookie (ต้องตั้งใน .env ตอน production)
+    app.secret_key = _cfg("FLASK_SECRET_KEY") or "dev-only-insecure-change-me"
+
+    @app.route("/auth/login")
+    def auth_login():
+        client_id = _cfg("GOOGLE_CLIENT_ID")
+        if not client_id:
+            return ("ยังไม่ได้ตั้งค่า GOOGLE_CLIENT_ID/SECRET ใน .env "
+                    "(ดูวิธีขอจาก Google Cloud Console ใน README)"), 500
+        # state กัน CSRF: สุ่มแล้วเก็บใน session ไปเทียบตอน callback
+        state = secrets.token_urlsafe(24)
+        session["oauth_state"] = state
+        params = urllib.parse.urlencode({
+            "client_id": client_id,
+            "redirect_uri": _redirect_uri(),
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "access_type": "online",
+            "prompt": "select_account",
+        })
+        return redirect(f"{_GOOGLE_AUTH_URL}?{params}")
+
+    @app.route("/auth/callback")
+    def auth_callback():
+        # เทียบ state กัน CSRF — ถ้าไม่ตรง (มัก = session/cookie หลุด) แสดงหน้าให้ลองใหม่ได้เลย
+        if not request.args.get("state") or request.args.get("state") != session.pop("oauth_state", None):
+            return (
+                "<div style='font-family:sans-serif;max-width:520px;margin:80px auto;text-align:center'>"
+                "<h3>เข้าสู่ระบบไม่สำเร็จ (session หลุด)</h3>"
+                "<p style='color:#555'>มักเกิดจาก cookie เก่าหรือ server เพิ่งรีสตาร์ท "
+                "ลองล้าง cookie ของ localhost แล้วเข้าสู่ระบบใหม่</p>"
+                "<p><a href='/auth/login' style='background:#E8762C;color:#fff;padding:10px 18px;"
+                "border-radius:8px;text-decoration:none'>🔑 ลองเข้าสู่ระบบใหม่</a></p>"
+                "<p><a href='/' style='color:#15457A'>กลับหน้าแรก</a></p></div>"
+            ), 400
+        if request.args.get("error"):
+            return f"Google ปฏิเสธการเข้าสู่ระบบ: {request.args.get('error')}", 400
+        code = request.args.get("code")
+        if not code:
+            return "ไม่ได้รับ code จาก Google", 400
+
+        try:
+            tokens = _post_form(_GOOGLE_TOKEN_URL, {
+                "code": code,
+                "client_id": _cfg("GOOGLE_CLIENT_ID"),
+                "client_secret": _cfg("GOOGLE_CLIENT_SECRET"),
+                "redirect_uri": _redirect_uri(),
+                "grant_type": "authorization_code",
+            })
+            access_token = tokens.get("access_token")
+            if not access_token:
+                return f"แลก token ไม่สำเร็จ: {tokens.get('error_description') or tokens}", 502
+            info = _get_json(_GOOGLE_USERINFO_URL, access_token)
+        except Exception as e:
+            return f"เชื่อมต่อ Google ไม่สำเร็จ: {e}", 502
+
+        # เก็บเฉพาะข้อมูลที่ต้องใช้ลง session (เซ็นด้วย FLASK_SECRET_KEY)
+        session["user"] = {
+            "id": info.get("id"),
+            "email": info.get("email"),
+            "name": info.get("name"),
+            "picture": info.get("picture"),
+        }
+        return redirect("/")
+
+    @app.route("/auth/logout", methods=["POST"])
+    def auth_logout():
+        session.pop("user", None)
+        return jsonify({"ok": True})
+
+    @app.route("/auth/me")
+    def auth_me():
+        return jsonify({"user": current_user()})
