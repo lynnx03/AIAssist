@@ -56,6 +56,49 @@ def _thai_to_arabic(s: str) -> str:
 # ---------------------------------------------------------------------------
 # อ่านค่าเกรด + เกณฑ์จาก DB
 # ---------------------------------------------------------------------------
+def build_domain_digest(db_path: str) -> str:
+    """สรุป 'ข้อเท็จจริงจริง' จาก DB แบบกระชับ ไว้ยัดเข้า prompt โหมดสนทนา
+    เพื่อให้ LLM ตอบโดยยึดข้อมูลของเรา (กัน hallucinate + กันนอกเรื่อง)
+    เนื้อหาสั้น สร้างครั้งเดียวแล้ว cache ได้"""
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        progs = con.execute(
+            "SELECT program_code, name_th, total_credits FROM programs ORDER BY program_code"
+        ).fetchall()
+        mod_rows = con.execute(
+            "SELECT p.program_code, GROUP_CONCAT(DISTINCT apc.module) m "
+            "FROM academic_plan_courses apc JOIN programs p ON p.program_id = apc.program_id "
+            "WHERE apc.module IS NOT NULL GROUP BY p.program_code"
+        ).fetchall()
+        rule_cats = [r[0] for r in con.execute("SELECT DISTINCT category FROM rules ORDER BY category")]
+        schols = [r[0] for r in con.execute(
+            "SELECT name FROM scholarships ORDER BY gpa_requirement IS NULL, gpa_requirement DESC")]
+        grades = con.execute(
+            "SELECT grade, point FROM grade_scale WHERE is_gpa=1 ORDER BY point DESC").fetchall()
+    except sqlite3.Error:
+        con.close()
+        return ""
+    con.close()
+
+    lines = ["หลักสูตรทั้งหมด (รหัส = ชื่อ, หน่วยกิตจบ):"]
+    for p in progs:
+        lines.append(f"  - {p['program_code']} = {p['name_th']} ({p['total_credits']} หน่วยกิต)")
+    modmap = {r["program_code"]: r["m"] for r in mod_rows}
+    if modmap:
+        lines.append("โมดูล/สายเฉพาะทาง (เฉพาะบางหลักสูตร):")
+        for code, m in modmap.items():
+            lines.append(f"  - {code}: {m}")
+    if grades:
+        lines.append("ค่าเกรดที่คิด GPA: " + ", ".join(f"{g['grade']}={g['point']}" for g in grades)
+                     + "  (S/U/T/I ไม่คิด GPA)")
+    if rule_cats:
+        lines.append("หมวดกฎ/ระเบียบที่มีในระบบ: " + ", ".join(rule_cats))
+    if schols:
+        lines.append("ทุนการศึกษาที่มีในระบบ: " + ", ".join(schols))
+    return "\n".join(lines)
+
+
 def load_grade_points(db_path: str) -> dict:
     """คืน dict: grade -> {'point': float|None, 'is_gpa': bool} จากตาราง grade_scale"""
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)

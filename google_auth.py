@@ -22,6 +22,7 @@ Endpoints (register ผ่าน register_auth(app)):
 
 import json
 import os
+import re
 import secrets
 import urllib.parse
 import urllib.request
@@ -47,19 +48,82 @@ def _post_form(url, data):
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        # Google ส่งรายละเอียด error มาใน body (เช่น invalid_grant) -> อ่านมาคืนให้เห็นสาเหตุจริง
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"error": f"http_{e.code}", "error_description": str(e)}
 
 
 def _get_json(url, bearer):
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {bearer}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"error": f"http_{e.code}", "error_description": str(e)}
+
+
+def _email_set(env_name: str) -> set:
+    return {e.strip().lower() for e in os.environ.get(env_name, "").split(",") if e.strip()}
+
+
+def classify_role(email: str) -> str:
+    """แยกบทบาทจากอีเมล: 'dev' | 'advisor' | 'student'
+    ลำดับความสำคัญ: DEV_EMAILS > ADVISOR/STUDENT override > heuristic
+    กติกา (KMITL):
+      - DEV_EMAILS (คนพัฒนา) -> dev (เห็นทุกอย่าง + หน้า Dev)
+      - อีเมลนักศึกษา = รหัสนักศึกษา (ตัวเลขล้วน) เช่น 66070104@kmitl.ac.th -> student
+      - อีเมลชื่อคน เช่น somchai.x@kmitl.ac.th -> advisor/เจ้าหน้าที่"""
+    email = (email or "").strip().lower()
+    local = email.split("@")[0]
+    if email in _email_set("DEV_EMAILS"):
+        return "dev"
+    if email in _email_set("ADVISOR_EMAILS"):
+        return "advisor"
+    if email in _email_set("STUDENT_EMAILS"):
+        return "student"
+    if re.fullmatch(r"\d{6,}", local):   # local-part เป็นตัวเลขล้วน = รหัสนักศึกษา
+        return "student"
+    return "advisor"
 
 
 def current_user():
     """คืน dict ของ user ที่ล็อกอินอยู่ หรือ None"""
     return session.get("user")
+
+
+def advisor_required(view):
+    """เดคอเรเตอร์กันเส้นทางเฉพาะอาจารย์ที่ปรึกษา (dev เข้าได้ด้วย)"""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        u = current_user()
+        if not u:
+            return jsonify({"error": "ต้องเข้าสู่ระบบก่อน"}), 401
+        if u.get("role") not in ("advisor", "dev"):
+            return jsonify({"error": "เฉพาะอาจารย์ที่ปรึกษาเท่านั้น"}), 403
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def dev_required(view):
+    """เดคอเรเตอร์กันเส้นทางเฉพาะผู้พัฒนา (role = dev)"""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        u = current_user()
+        if not u:
+            return jsonify({"error": "ต้องเข้าสู่ระบบก่อน"}), 401
+        if u.get("role") != "dev":
+            return jsonify({"error": "เฉพาะผู้พัฒนาเท่านั้น"}), 403
+        return view(*args, **kwargs)
+    return wrapped
 
 
 def login_required(view):
@@ -127,10 +191,29 @@ def register_auth(app):
             })
             access_token = tokens.get("access_token")
             if not access_token:
-                return f"แลก token ไม่สำเร็จ: {tokens.get('error_description') or tokens}", 502
+                # กันเคส callback ยิงซ้ำ (browser prefetch/silent auth) — ถ้าอีก request แลก token
+                # สำเร็จและ set session ไปแล้ว ก็ถือว่าเข้าสู่ระบบสำเร็จ ไม่ต้องโชว์ error
+                if session.get("user"):
+                    return redirect("/")
+                # โชว์ error จริงจาก Google (invalid_grant / redirect_uri_mismatch / invalid_client ฯลฯ)
+                err = tokens.get("error", "")
+                desc = tokens.get("error_description", "") or str(tokens)
+                print(f"[auth] token exchange failed: {err} — {desc}  (redirect_uri={_redirect_uri()})")
+                hint = {
+                    "invalid_grant": "code หมดอายุหรือถูกใช้ไปแล้ว — ลองเข้าสู่ระบบใหม่ (อย่ารีเฟรชหน้า callback)",
+                    "redirect_uri_mismatch": f"redirect_uri ไม่ตรงกับที่ตั้งใน Google Cloud — ต้องเป็น {_redirect_uri()} เป๊ะ",
+                    "invalid_client": "GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET ไม่ถูกต้อง",
+                }.get(err, "")
+                return (f"แลก token ไม่สำเร็จ: <b>{err}</b><br>{desc}"
+                        + (f"<br><br>💡 {hint}" if hint else "")
+                        + "<br><br><a href='/auth/login'>🔑 ลองเข้าสู่ระบบใหม่</a>"), 502
             info = _get_json(_GOOGLE_USERINFO_URL, access_token)
+            if info.get("error"):
+                print(f"[auth] userinfo failed: {info}")
+                return f"ดึงข้อมูลผู้ใช้ไม่สำเร็จ: {info.get('error_description') or info}", 502
         except Exception as e:
-            return f"เชื่อมต่อ Google ไม่สำเร็จ: {e}", 502
+            print(f"[auth] callback exception: {type(e).__name__}: {e}")
+            return f"เชื่อมต่อ Google ไม่สำเร็จ: {type(e).__name__}: {e}", 502
 
         # เก็บเฉพาะข้อมูลที่ต้องใช้ลง session (เซ็นด้วย FLASK_SECRET_KEY)
         session["user"] = {
@@ -138,6 +221,7 @@ def register_auth(app):
             "email": info.get("email"),
             "name": info.get("name"),
             "picture": info.get("picture"),
+            "role": classify_role(info.get("email")),   # student / advisor
         }
         return redirect("/")
 
@@ -148,4 +232,8 @@ def register_auth(app):
 
     @app.route("/auth/me")
     def auth_me():
-        return jsonify({"user": current_user()})
+        u = current_user()
+        if u and not u.get("role"):        # backfill role ให้ session เก่าที่ยังไม่มี
+            u["role"] = classify_role(u.get("email"))
+            session["user"] = u
+        return jsonify({"user": u})

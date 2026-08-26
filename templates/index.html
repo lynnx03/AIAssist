@@ -68,6 +68,10 @@
   .auth-area { display: flex; align-items: center; gap: 9px; }
   .auth-area img { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--orange); object-fit: cover; }
   .auth-area .uname { font-size: 13px; font-weight: 600; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .role-badge { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+  .role-badge.student { background: #e6f0fb; color: var(--navy); }
+  .role-badge.advisor { background: #fdf1e3; color: var(--orange-dark); }
+  .role-badge.dev { background: #e8eaf3; color: #4b3fa6; }
   .auth-btn {
     padding: 8px 14px; font-size: 13px; font-weight: 600; border: none; border-radius: 10px;
     background: linear-gradient(135deg, var(--orange), var(--orange-600)); color: white;
@@ -268,6 +272,7 @@
   <button data-tab="gpa">🧮 คำนวณเกรด</button>
   <button data-tab="scholar">🎓 ทุนการศึกษา</button>
   <button data-tab="advisor">📊 Dashboard อาจารย์</button>
+  <button data-tab="dev" style="display:none">🛠️ Dev</button>
 </nav>
 
 <main>
@@ -349,6 +354,25 @@
       <div id="term-chart"></div>
     </div>
   </section>
+
+  <!-- ===================== TAB: DEV ===================== -->
+  <section id="tab-dev" class="tabpage">
+    <h2 class="page-title">🛠️ Dev Panel</h2>
+    <div class="sub">เครื่องมือสำหรับผู้พัฒนา (เห็นเฉพาะ role = dev)</div>
+    <div class="section">
+      <h3>ดูมุมมองเป็น (preview role)</h3>
+      <div class="row" id="viewas-btns">
+        <button class="btn ghost" type="button" data-view="student">🎓 นักศึกษา</button>
+        <button class="btn ghost" type="button" data-view="advisor">👨‍🏫 อาจารย์</button>
+        <button class="btn ghost" type="button" data-view="dev">🛠️ Dev (เห็นทั้งหมด)</button>
+      </div>
+      <div class="meta" style="margin-top:10px">* สลับการมองเห็นแท็บเพื่อทดสอบ UI ของแต่ละ role — ไม่เปลี่ยนบัญชี/สิทธิ์จริง (API ยังใช้สิทธิ์ dev)</div>
+    </div>
+    <div class="section">
+      <h3>ข้อมูลระบบ</h3>
+      <div id="dev-sysinfo" class="status">กำลังโหลด…</div>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -409,22 +433,81 @@ function renderTable(columns, rows) {
 }
 
 // ---------- Google auth (header login state) ----------
+let REAL_ROLE = 'student';
+function applyRole(role) {
+  REAL_ROLE = role;
+  // แท็บ Dev เห็นเฉพาะผู้พัฒนา
+  const devTab = document.querySelector('nav.tabs button[data-tab="dev"]');
+  if (devTab) devTab.style.display = (role === 'dev') ? '' : 'none';
+  // ตั้งมุมมองเริ่มต้นตาม role จริง (dev เห็นทั้งหมด)
+  setViewAs(role === 'dev' ? 'dev' : role);
+}
+// สลับการมองเห็นแท็บให้เหมือน role ที่เลือก (ใช้ preview บนหน้า Dev)
+function setViewAs(view) {
+  const advTab = document.querySelector('nav.tabs button[data-tab="advisor"]');
+  const showAdv = (view === 'advisor' || view === 'dev');
+  if (advTab) advTab.style.display = showAdv ? '' : 'none';
+  document.querySelectorAll('#viewas-btns [data-view]').forEach(b => {
+    const on = b.dataset.view === view;
+    b.classList.toggle('orange', on);
+    b.classList.toggle('ghost', !on);
+  });
+  // ถ้าแท็บที่เปิดอยู่ถูกซ่อน ให้กลับไปแท็บแชท
+  const active = document.querySelector('nav.tabs button.active');
+  if (active && active.style.display === 'none') {
+    document.querySelector('nav.tabs button[data-tab="chat"]').click();
+  }
+}
+document.querySelectorAll('#viewas-btns [data-view]').forEach(b => {
+  b.addEventListener('click', () => setViewAs(b.dataset.view));
+});
+
+let devLoaded = false;
+async function loadDevInfo() {
+  const el = document.getElementById('dev-sysinfo');
+  try {
+    const d = await (await fetch('/dev-info')).json();
+    if (d.error) { el.textContent = 'โหลดไม่ได้: ' + d.error; return; }
+    let html = '<div style="overflow-x:auto"><table><tbody>';
+    html += `<tr><td><b>บัญชี</b></td><td>${escapeHtml(d.user.email || '')} · <b>${escapeHtml(d.user.role)}</b></td></tr>`;
+    html += `<tr><td><b>LLM model</b></td><td>${escapeHtml(d.model)}</td></tr>`;
+    html += `<tr><td><b>provider</b></td><td>${escapeHtml(d.provider)}</td></tr>`;
+    html += `<tr><td><b>DB</b></td><td>${escapeHtml(d.db_path)}</td></tr>`;
+    html += '</tbody></table></div>';
+    html += '<div class="det-label" style="margin-top:14px">ตารางในฐานข้อมูล (จำนวนแถว)</div><div style="overflow-x:auto"><table><tbody>';
+    for (const [t, c] of Object.entries(d.db_counts)) html += `<tr><td>${escapeHtml(t)}</td><td>${escapeHtml(c)}</td></tr>`;
+    html += '</tbody></table></div>';
+    html += `<details class="msg-details" style="margin-top:14px"><summary>Domain digest (ที่ ground โหมดแชท)</summary><pre>${escapeHtml(d.digest || '')}</pre></details>`;
+    el.className = '';
+    el.innerHTML = html;
+  } catch (e) {
+    el.className = '';
+    el.textContent = 'เชื่อมต่อไม่ได้: ' + e;
+  }
+}
 async function loadAuth() {
   const el = document.getElementById('auth-area');
   try {
     const resp = await fetch('/auth/me');
     const data = await resp.json();
     if (data.user) {
-      el.innerHTML =
+      const role = data.user.role;
+      const badge = role === 'advisor'
+        ? '<span class="role-badge advisor">👨‍🏫 อาจารย์</span>'
+        : role === 'dev'
+        ? '<span class="role-badge dev">🛠️ Dev</span>'
+        : '<span class="role-badge student">🎓 นักศึกษา</span>';
+      el.innerHTML = badge +
         `${data.user.picture ? `<img src="${escapeHtml(data.user.picture)}" alt="" referrerpolicy="no-referrer">` : ''}` +
         `<span class="uname">${escapeHtml(data.user.name || data.user.email || 'ผู้ใช้')}</span>` +
         `<button class="auth-btn ghost" id="logout-btn">ออกจากระบบ</button>`;
       document.getElementById('logout-btn').addEventListener('click', async () => {
         await fetch('/auth/logout', { method: 'POST' });
-        loadAuth();
+        location.href = '/';   // กลับไปหน้า login
       });
+      applyRole(role);
     } else {
-      el.innerHTML = `<a href="/auth/login"><button class="auth-btn">🔑 เข้าสู่ระบบด้วย Google</button></a>`;
+      location.href = '/';     // ไม่ล็อกอิน -> เด้งไปหน้า login
     }
   } catch (e) {
     el.innerHTML = '';
@@ -443,6 +526,7 @@ tabButtons.forEach(btn => {
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === 'scholar' && !loadedTabs.scholar) { loadScholarships(); loadedTabs.scholar = true; }
     if (tab === 'advisor' && !loadedTabs.advisor) { loadDashboard(); loadedTabs.advisor = true; }
+    if (tab === 'dev' && !devLoaded) { loadDevInfo(); devLoaded = true; }
   });
 });
 

@@ -30,6 +30,7 @@ from text_to_sql_chatbot import (
     sanitize_sql,
 )
 from assist_logic import (
+    build_domain_digest,
     classify_status,
     compute_gpa,
     is_multicolumn,
@@ -37,7 +38,7 @@ from assist_logic import (
     load_thresholds,
     parse_transcript,
 )
-from google_auth import register_auth
+from google_auth import register_auth, login_required, advisor_required, dev_required, current_user
 
 ENV_FILE = os.environ.get("ENV_FILE", ".env")
 load_dotenv(ENV_FILE)
@@ -48,6 +49,7 @@ app = Flask(__name__)
 register_auth(app)  # ผูก Google OAuth (/auth/login, /auth/callback, /auth/logout, /auth/me)
 
 _system_prompt = None
+_domain_digest = None
 
 
 def get_system_prompt() -> str:
@@ -59,12 +61,27 @@ def get_system_prompt() -> str:
     return _system_prompt
 
 
+def get_domain_digest() -> str:
+    """สรุปข้อเท็จจริงจาก DB สำหรับ ground โหมดสนทนา (สร้างครั้งเดียว cache)"""
+    global _domain_digest
+    if _domain_digest is None:
+        try:
+            _domain_digest = build_domain_digest(DB_PATH)
+        except Exception:
+            _domain_digest = ""
+    return _domain_digest
+
+
 @app.route("/")
 def index():
+    # ต้องเข้าสู่ระบบก่อนถึงจะใช้แอปได้ — ยังไม่ล็อกอิน = เจอหน้า login
+    if not current_user():
+        return render_template("login.html")
     return render_template("index.html")
 
 
 @app.route("/ask", methods=["POST"])
+@login_required
 def ask():
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -85,9 +102,9 @@ def ask():
         t_route = time.perf_counter()
 
         def chat_reply(note=""):
-            """โหมดสนทนา — ให้ Qwen ตอบเองแบบ chatbot (ไม่ผูก SQL)"""
+            """โหมดสนทนา — ให้ Qwen ตอบเองแบบ chatbot (ไม่ผูก SQL) แต่ ground ด้วยข้อเท็จจริงจาก DB"""
             try:
-                answer = general_answer(question, note=note)
+                answer = general_answer(question, note=note, digest=get_domain_digest())
             except Exception as e:
                 return jsonify({"error": f"ตอบแบบสนทนาไม่สำเร็จ: {e}"}), 502
             t_ans = time.perf_counter()
@@ -143,6 +160,7 @@ def ask():
 
 
 @app.route("/calc-gpa", methods=["POST"])
+@login_required
 def calc_gpa():
     """Phase 2: คำนวณ GPA จาก transcript ที่ paste มา หรือจากรายวิชาที่ผู้ใช้แก้ในตาราง
     body: {"transcript": "<ข้อความ>"}  หรือ  {"courses": [ {code,name,credits,grade,year,semester}, ... ]}
@@ -174,6 +192,7 @@ def calc_gpa():
 
 
 @app.route("/scholarships")
+@login_required
 def scholarships():
     """Phase 3: คืนรายการทุนทั้งหมด (สำหรับหน้า 'ทุนการศึกษา')"""
     try:
@@ -190,8 +209,9 @@ def scholarships():
 
 
 @app.route("/dashboard-data")
+@advisor_required
 def dashboard_data():
-    """Phase 4: ข้อมูลนักศึกษาในความดูแล + สถานะ (คำนวณสดจากเกณฑ์ rules) + GPA รายเทอม"""
+    """Phase 4: ข้อมูลนักศึกษาในความดูแล + สถานะ (เฉพาะอาจารย์ที่ปรึกษา)"""
     try:
         _, students, err = run_query(
             DB_PATH,
@@ -233,6 +253,33 @@ def dashboard_data():
         })
     except Exception as e:
         return jsonify({"error": f"โหลด dashboard ไม่สำเร็จ: {e}"}), 500
+
+
+@app.route("/dev-info")
+@dev_required
+def dev_info():
+    """ข้อมูลระบบสำหรับผู้พัฒนา (เฉพาะ role=dev)"""
+    import sqlite3
+    model = os.environ.get("LLM_MODEL", "")
+    provider = os.environ.get("LLM_PROVIDER", "").strip() or "(auto — ไม่ได้ pin)"
+    counts = {}
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        tables = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        for t in tables:
+            counts[t] = con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+        con.close()
+    except Exception as e:
+        counts = {"(error)": str(e)}
+    return jsonify({
+        "user": current_user(),
+        "model": model,
+        "provider": provider,
+        "db_path": DB_PATH,
+        "db_counts": counts,
+        "digest": get_domain_digest(),
+    })
 
 
 if __name__ == "__main__":
