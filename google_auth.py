@@ -34,6 +34,9 @@ _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
+# โดเมนที่อนุญาตให้ล็อกอิน (ด่านกันโดเมนฝั่ง server) — ตั้งใน .env ได้ถ้าต้องการเปลี่ยน
+ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "kmitl.ac.th").strip().lower()
+
 
 def _cfg(name, default=None):
     return os.environ.get(name, default)
@@ -77,11 +80,13 @@ def _email_set(env_name: str) -> set:
 
 def classify_role(email: str) -> str:
     """แยกบทบาทจากอีเมล: 'dev' | 'advisor' | 'student'
-    ลำดับความสำคัญ: DEV_EMAILS > ADVISOR/STUDENT override > heuristic
+    ลำดับความสำคัญ: DEV_EMAILS > ADVISOR_EMAILS > STUDENT_EMAILS > heuristic > default
     กติกา (KMITL):
       - DEV_EMAILS (คนพัฒนา) -> dev (เห็นทุกอย่าง + หน้า Dev)
+      - ADVISOR_EMAILS (allowlist) -> advisor   (advisor มาจาก allowlist นี้เท่านั้น)
+      - STUDENT_EMAILS (allowlist) -> student
       - อีเมลนักศึกษา = รหัสนักศึกษา (ตัวเลขล้วน) เช่น 66070104@kmitl.ac.th -> student
-      - อีเมลชื่อคน เช่น somchai.x@kmitl.ac.th -> advisor/เจ้าหน้าที่"""
+      - อื่นๆ ทั้งหมด -> student   (default ปลอดภัย ไม่เดา advisor จากรูปอีเมลอีกต่อไป)"""
     email = (email or "").strip().lower()
     local = email.split("@")[0]
     if email in _email_set("DEV_EMAILS"):
@@ -92,7 +97,7 @@ def classify_role(email: str) -> str:
         return "student"
     if re.fullmatch(r"\d{6,}", local):   # local-part เป็นตัวเลขล้วน = รหัสนักศึกษา
         return "student"
-    return "advisor"
+    return "student"
 
 
 def current_user():
@@ -159,6 +164,7 @@ def register_auth(app):
             "state": state,
             "access_type": "online",
             "prompt": "select_account",
+            "hd": ALLOWED_DOMAIN,   # ให้ Google กรองบัญชีตั้งแต่หน้า consent (ชั้นเสริม ไม่ใช่ชั้นหลัก)
         })
         return redirect(f"{_GOOGLE_AUTH_URL}?{params}")
 
@@ -214,6 +220,22 @@ def register_auth(app):
         except Exception as e:
             print(f"[auth] callback exception: {type(e).__name__}: {e}")
             return f"เชื่อมต่อ Google ไม่สำเร็จ: {type(e).__name__}: {e}", 502
+
+        # ── ด่านกันโดเมน (ฝั่ง server เสมอ — ห้ามพึ่ง hd param อย่างเดียว) ──
+        email = (info.get("email") or "").strip().lower()
+        verified = info.get("verified_email")
+        if verified is False or not email.endswith("@" + ALLOWED_DOMAIN):
+            print(f"[auth] domain rejected: email={email!r} verified={verified!r} "
+                  f"(allowed=@{ALLOWED_DOMAIN})")
+            return (
+                "<div style='font-family:sans-serif;max-width:520px;margin:80px auto;text-align:center'>"
+                f"<h3>เข้าสู่ระบบไม่สำเร็จ</h3>"
+                f"<p style='color:#555'>ระบบนี้ใช้ได้เฉพาะอีเมล <b>@{ALLOWED_DOMAIN}</b> เท่านั้น "
+                "กรุณาเข้าสู่ระบบด้วยอีเมลของมหาวิทยาลัย</p>"
+                "<p><a href='/auth/login' style='background:#E8762C;color:#fff;padding:10px 18px;"
+                "border-radius:8px;text-decoration:none'>🔑 ลองเข้าสู่ระบบใหม่</a></p>"
+                "<p><a href='/' style='color:#15457A'>กลับหน้าแรก</a></p></div>"
+            ), 403
 
         # เก็บเฉพาะข้อมูลที่ต้องใช้ลง session (เซ็นด้วย FLASK_SECRET_KEY)
         session["user"] = {

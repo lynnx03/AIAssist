@@ -29,6 +29,9 @@ GOOGLE_CLIENT_ID=<Client ID ที่ได้มา>
 GOOGLE_CLIENT_SECRET=<Client secret ที่ได้มา>
 GOOGLE_REDIRECT_URI=http://localhost:5000/auth/callback
 FLASK_SECRET_KEY=<คีย์สุ่มยาวๆ>
+# (ไม่บังคับ) อีเมลอาจารย์ที่ปรึกษา + โดเมนที่อนุญาต
+ADVISOR_EMAILS=somchai.x@kmitl.ac.th,jane.d@kmitl.ac.th
+ALLOWED_DOMAIN=kmitl.ac.th
 ```
 สร้าง `FLASK_SECRET_KEY` ด้วยคำสั่ง:
 ```bash
@@ -71,3 +74,14 @@ def dashboard_data():
 - `GOOGLE_CLIENT_SECRET`, `FLASK_SECRET_KEY` อ่านฝั่ง server เท่านั้น ไม่เคยส่งไป frontend
 - `.env` อยู่ใน `.gitignore` แล้ว — อย่า commit ขึ้น git
 - state parameter กัน CSRF ระหว่าง login flow แล้ว
+
+## การจำกัดโดเมน + บทบาท (role)
+- **ระบบรับเฉพาะอีเมล `@kmitl.ac.th` เท่านั้น** — อีเมลนอกโดเมน (เช่น Gmail ส่วนตัว)
+  หรืออีเมลที่ Google ยังไม่ยืนยัน (`verified_email = false`) จะถูกปฏิเสธด้วย HTTP 403
+  ที่ฝั่ง server เสมอ (ไม่ได้พึ่ง `hd` param บนหน้า consent ของ Google เพียงอย่างเดียว)
+- อยากให้ใครเป็น **role `advisor`** (อาจารย์ที่ปรึกษา — เข้าถึง `/dashboard-data`
+  ที่มีข้อมูล sensitive ของนักศึกษา) ต้องเพิ่มอีเมลนั้นเข้า `ADVISOR_EMAILS` ใน `.env` เอง
+  (คั่นหลายอีเมลด้วย comma) — โดยดีฟอลต์ทุกอีเมลที่ผ่านด่านโดเมนจะได้ role `student` ที่ปลอดภัย
+  ระบบจะไม่เดา role `advisor` จากรูปแบบอีเมลอีกต่อไป
+- ถ้าต้องการเปลี่ยนโดเมนที่อนุญาต ตั้งค่า `ALLOWED_DOMAIN` ใน `.env`
+  (ดีฟอลต์คือ `kmitl.ac.th` ถ้าไม่ได้ตั้ง)
