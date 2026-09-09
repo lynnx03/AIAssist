@@ -29,6 +29,7 @@ import urllib.request
 from functools import wraps
 
 from flask import jsonify, redirect, request, session
+from markupsafe import escape
 
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -36,6 +37,54 @@ _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 # โดเมนที่อนุญาตให้ล็อกอิน (ด่านกันโดเมนฝั่ง server) — ตั้งใน .env ได้ถ้าต้องการเปลี่ยน
 ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "kmitl.ac.th").strip().lower()
+
+
+def _auth_page(title, message_html, status=200, show_login=True, tone="info"):
+    """หน้า auth (login/error) สไตล์มินิมอลให้เข้าธีมเว็บ UniAssist (KMITL)
+    message_html = HTML ที่ปลอดภัยแล้ว (ผู้เรียกต้อง escape ค่าจากผู้ใช้เอง)"""
+    accent = "#e0483d" if tone == "error" else "var(--navy)"
+    btn = ("<a class='btn' href='/auth/login'>🔑 เข้าสู่ระบบด้วยบัญชี KMITL</a>"
+           if show_login else "")
+    home = "<a class='home' href='/'>← กลับหน้าแรก</a>" if show_login else ""
+    html = f"""<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape(title)} — UniAssist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{{--navy:#15457A;--navy-600:#1b5698;--orange:#E8762C;--orange-600:#d3641c;--ink:#1b2430;--muted:#6b7688;--border:#e7ebf1;}}
+  *{{box-sizing:border-box;}}
+  body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+    font-family:"IBM Plex Sans Thai","Segoe UI",Tahoma,sans-serif;color:var(--ink);
+    background:radial-gradient(1100px 380px at 100% -8%,#eaf1fb,transparent 60%),
+      radial-gradient(900px 340px at -10% 0%,#fdeede,transparent 55%),#f5f7fb;
+    -webkit-font-smoothing:antialiased;}}
+  .card{{background:#fff;border:1px solid var(--border);border-radius:22px;
+    box-shadow:0 12px 40px rgba(16,24,40,.13);max-width:430px;width:100%;padding:36px 32px;text-align:center;}}
+  .logo{{width:56px;height:56px;border-radius:16px;margin:0 auto 20px;
+    background:linear-gradient(135deg,{accent},var(--navy-600));color:#fff;display:flex;
+    align-items:center;justify-content:center;font-weight:700;font-size:27px;box-shadow:0 6px 18px rgba(21,69,122,.28);}}
+  h1{{font-size:21px;font-weight:700;margin:0 0 12px;letter-spacing:-.2px;}}
+  .msg{{color:var(--muted);font-size:14.5px;line-height:1.65;margin:0 0 24px;}}
+  .msg b{{color:var(--ink);font-weight:600;}}
+  .msg code{{background:rgba(21,69,122,.08);padding:2px 7px;border-radius:6px;font-size:13px;
+    font-family:"SF Mono",Consolas,monospace;word-break:break-all;}}
+  .btn{{display:inline-block;background:linear-gradient(135deg,var(--orange),var(--orange-600));color:#fff;
+    padding:12px 24px;border-radius:13px;text-decoration:none;font-weight:600;font-size:14.5px;
+    box-shadow:0 5px 16px rgba(232,118,44,.32);transition:filter .12s,transform .12s;}}
+  .btn:hover{{filter:brightness(1.05);transform:translateY(-1px);}}
+  .home{{display:block;margin-top:16px;color:var(--navy);font-size:13px;text-decoration:none;}}
+  .home:hover{{text-decoration:underline;}}
+</style></head>
+<body><div class="card">
+  <div class="logo">U</div>
+  <h1>{escape(title)}</h1>
+  <div class="msg">{message_html}</div>
+  {btn}{home}
+</div></body></html>"""
+    return html, status
 
 
 def _cfg(name, default=None):
@@ -76,6 +125,23 @@ def _get_json(url, bearer):
 
 def _email_set(env_name: str) -> set:
     return {e.strip().lower() for e in os.environ.get(env_name, "").split(",") if e.strip()}
+
+
+def _allowed_domains() -> set:
+    raw = os.environ.get("ALLOWED_DOMAINS", "kmitl.ac.th")
+    return {d.strip().lower().lstrip("@") for d in raw.split(",") if d.strip()}
+
+
+def is_allowed_email(email: str) -> bool:
+    """อนุญาตเฉพาะอีเมลในโดเมนที่กำหนด (ค่าเริ่มต้น: kmitl.ac.th)
+    ยกเว้นอีเมลที่ถูกระบุ role ไว้ชัดใน DEV/ADVISOR/STUDENT_EMAILS (whitelist รายคน)
+    -> กันอีเมลนอกสถาบัน เช่น @gmail.com เข้าระบบ"""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return False
+    if email in (_email_set("DEV_EMAILS") | _email_set("ADVISOR_EMAILS") | _email_set("STUDENT_EMAILS")):
+        return True
+    return email.rsplit("@", 1)[-1] in _allowed_domains()
 
 
 def classify_role(email: str) -> str:
@@ -151,8 +217,11 @@ def register_auth(app):
     def auth_login():
         client_id = _cfg("GOOGLE_CLIENT_ID")
         if not client_id:
-            return ("ยังไม่ได้ตั้งค่า GOOGLE_CLIENT_ID/SECRET ใน .env "
-                    "(ดูวิธีขอจาก Google Cloud Console ใน README)"), 500
+            return _auth_page(
+                "ยังไม่ได้ตั้งค่า Google Login",
+                "ยังไม่ได้ตั้งค่า <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code> ใน .env<br>"
+                "ดูวิธีขอจาก Google Cloud Console ใน <b>GOOGLE_AUTH_SETUP.md</b>",
+                500, show_login=False, tone="error")
         # state กัน CSRF: สุ่มแล้วเก็บใน session ไปเทียบตอน callback
         state = secrets.token_urlsafe(24)
         session["oauth_state"] = state
@@ -172,20 +241,18 @@ def register_auth(app):
     def auth_callback():
         # เทียบ state กัน CSRF — ถ้าไม่ตรง (มัก = session/cookie หลุด) แสดงหน้าให้ลองใหม่ได้เลย
         if not request.args.get("state") or request.args.get("state") != session.pop("oauth_state", None):
-            return (
-                "<div style='font-family:sans-serif;max-width:520px;margin:80px auto;text-align:center'>"
-                "<h3>เข้าสู่ระบบไม่สำเร็จ (session หลุด)</h3>"
-                "<p style='color:#555'>มักเกิดจาก cookie เก่าหรือ server เพิ่งรีสตาร์ท "
-                "ลองล้าง cookie ของ localhost แล้วเข้าสู่ระบบใหม่</p>"
-                "<p><a href='/auth/login' style='background:#E8762C;color:#fff;padding:10px 18px;"
-                "border-radius:8px;text-decoration:none'>🔑 ลองเข้าสู่ระบบใหม่</a></p>"
-                "<p><a href='/' style='color:#15457A'>กลับหน้าแรก</a></p></div>"
-            ), 400
+            return _auth_page(
+                "เข้าสู่ระบบไม่สำเร็จ",
+                "session หลุด (มักเกิดจาก cookie เก่าหรือ server เพิ่งรีสตาร์ท)<br>"
+                "ลองล้าง cookie ของ localhost แล้วเข้าสู่ระบบใหม่",
+                400, tone="error")
         if request.args.get("error"):
-            return f"Google ปฏิเสธการเข้าสู่ระบบ: {request.args.get('error')}", 400
+            return _auth_page("เข้าสู่ระบบไม่สำเร็จ",
+                              f"Google ปฏิเสธการเข้าสู่ระบบ: <b>{escape(request.args.get('error'))}</b>",
+                              400, tone="error")
         code = request.args.get("code")
         if not code:
-            return "ไม่ได้รับ code จาก Google", 400
+            return _auth_page("เข้าสู่ระบบไม่สำเร็จ", "ไม่ได้รับ code จาก Google", 400, tone="error")
 
         try:
             tokens = _post_form(_GOOGLE_TOKEN_URL, {
@@ -210,16 +277,31 @@ def register_auth(app):
                     "redirect_uri_mismatch": f"redirect_uri ไม่ตรงกับที่ตั้งใน Google Cloud — ต้องเป็น {_redirect_uri()} เป๊ะ",
                     "invalid_client": "GOOGLE_CLIENT_ID หรือ GOOGLE_CLIENT_SECRET ไม่ถูกต้อง",
                 }.get(err, "")
-                return (f"แลก token ไม่สำเร็จ: <b>{err}</b><br>{desc}"
-                        + (f"<br><br>💡 {hint}" if hint else "")
-                        + "<br><br><a href='/auth/login'>🔑 ลองเข้าสู่ระบบใหม่</a>"), 502
+                msg = f"<b>{escape(err)}</b><br>{escape(desc)}"
+                if hint:
+                    msg += f"<br><br>💡 {escape(hint)}"
+                return _auth_page("แลก token ไม่สำเร็จ", msg, 502, tone="error")
             info = _get_json(_GOOGLE_USERINFO_URL, access_token)
             if info.get("error"):
                 print(f"[auth] userinfo failed: {info}")
-                return f"ดึงข้อมูลผู้ใช้ไม่สำเร็จ: {info.get('error_description') or info}", 502
+                return _auth_page("ดึงข้อมูลผู้ใช้ไม่สำเร็จ",
+                                  escape(str(info.get("error_description") or info)), 502, tone="error")
         except Exception as e:
             print(f"[auth] callback exception: {type(e).__name__}: {e}")
-            return f"เชื่อมต่อ Google ไม่สำเร็จ: {type(e).__name__}: {e}", 502
+            return _auth_page("เชื่อมต่อ Google ไม่สำเร็จ",
+                              f"{escape(type(e).__name__)}: {escape(str(e))}", 502, tone="error")
+
+        # กันอีเมลนอกสถาบัน — อนุญาตเฉพาะโดเมนที่กำหนด (เช่น @kmitl.ac.th)
+        email = info.get("email")
+        if not is_allowed_email(email):
+            session.pop("user", None)
+            print(f"[auth] blocked non-allowed email: {email}")
+            doms = ", ".join("@" + d for d in sorted(_allowed_domains()))
+            return _auth_page(
+                "เข้าสู่ระบบไม่ได้",
+                f"ระบบนี้ใช้ได้เฉพาะอีเมลของสถาบัน (<b>{escape(doms)}</b>) เท่านั้น<br>"
+                f"อีเมลที่ใช้: <b>{escape(email or '(ไม่ทราบ)')}</b>",
+                403, tone="error")
 
         # ── ด่านกันโดเมน (ฝั่ง server เสมอ — ห้ามพึ่ง hd param อย่างเดียว) ──
         email = (info.get("email") or "").strip().lower()
@@ -255,6 +337,10 @@ def register_auth(app):
     @app.route("/auth/me")
     def auth_me():
         u = current_user()
+        # กันเหนียว: ถ้า session เก่ามาจากอีเมลนอกโดเมนที่อนุญาต -> ล้างทิ้ง (invalidate)
+        if u and not is_allowed_email(u.get("email")):
+            session.pop("user", None)
+            return jsonify({"user": None})
         if u and not u.get("role"):        # backfill role ให้ session เก่าที่ยังไม่มี
             u["role"] = classify_role(u.get("email"))
             session["user"] = u

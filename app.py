@@ -215,7 +215,7 @@ def dashboard_data():
     try:
         _, students, err = run_query(
             DB_PATH,
-            "SELECT student_id, name, program_code, module, advisor_name, gpax, credits_earned, status "
+            "SELECT student_id, name, program_code, module, admission_year, advisor_name, gpax, credits_earned, status "
             "FROM students ORDER BY gpax",
         )
         if err:
@@ -232,11 +232,15 @@ def dashboard_data():
         thresholds = load_thresholds(DB_PATH)
 
         # จัดสถานะเสี่ยงให้นักศึกษาแต่ละคนจาก gpax ตามเกณฑ์ (ไม่ hardcode)
-        summary = {"risk": 0, "watch": 0, "honors": 0, "normal": 0, "unknown": 0}
+        # หมายเหตุ: บน dashboard อาจารย์ สนใจแค่ความเสี่ยง -> ยุบ honors/unknown เป็น "ปกติ"
+        _NORMAL = {"level": "normal", "label": "ปกติ", "color": "gray", "emoji": "⚪"}
+        summary = {"risk": 0, "watch": 0, "normal": 0}
         for s in students:
             st = classify_status(s.get("gpax"), thresholds)
+            if st["level"] not in ("risk", "watch"):
+                st = _NORMAL
             s["risk_status"] = st
-            summary[st["level"]] = summary.get(st["level"], 0) + 1
+            summary[st["level"]] += 1
 
         # จัดกลุ่ม GPA รายเทอมตาม student_id (ไว้ทำกราฟ)
         term_map = {}

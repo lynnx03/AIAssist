@@ -114,6 +114,9 @@
     background: var(--card); color: var(--ink); transition: border-color .15s, box-shadow .15s;
   }
   textarea:focus, input[type=text]:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(21,69,122,.12); }
+  select { font-family: inherit; font-size: 14px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); color: var(--ink); cursor: pointer; }
+  select:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(21,69,122,.12); }
+  .flt-label { font-size: 13px; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
   .btn {
     padding: 11px 20px; font-size: 14px; font-weight: 600; border: none; border-radius: var(--radius-sm);
     background: var(--navy); color: white; cursor: pointer; font-family: inherit; transition: transform .12s, box-shadow .12s, background .15s;
@@ -239,6 +242,9 @@
   /* ---------- dashboard ---------- */
   .summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 18px; }
   .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+  .stat.filter-tile { cursor: pointer; transition: transform .12s, box-shadow .12s, border-color .12s; }
+  .stat.filter-tile:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+  .stat.filter-tile.active { border-color: var(--navy); box-shadow: 0 0 0 2px rgba(21,69,122,.18); }
   .stat .num { font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -1px; }
   .stat .lbl { font-size: 12.5px; color: var(--muted); margin-top: 7px; font-weight: 600; }
   .pill { padding: 3px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; display: inline-block; }
@@ -765,23 +771,62 @@ async function loadDashboard() {
     status.textContent = 'เชื่อมต่อ server ไม่ได้: ' + e;
   }
 }
-let dashTermGpa = {};
+let dashTermGpa = {}, dashStudents = [], dashThresholds = {};
+let dashFilter = 'all', dashProgram = 'all', dashYear = 'all';
 function renderDashboard(data) {
   dashTermGpa = data.term_gpa || {};
-  const s = data.summary || {};
-  const th = data.thresholds || {};
+  dashStudents = data.students || [];
+  dashThresholds = data.thresholds || {};
+  dashFilter = 'all'; dashProgram = 'all'; dashYear = 'all';
+  document.getElementById('advisor-summary').classList.remove('hidden');
+  renderDash();
+}
 
+function renderDash() {
+  const th = dashThresholds;
+  const opt = (v, lb, cur) => `<option value="${v}"${String(v)===String(cur)?' selected':''}>${lb}</option>`;
+  const FILTERS = [['all','ทั้งหมด'],['risk','🔴 เสี่ยงรีไทร์'],['watch','🟠 เฝ้าระวัง'],['normal','⚪ ปกติ']];
+
+  // 1) กรองด้วย หลักสูตร + ปีที่เข้า ก่อน (เป็น "ขอบเขต")
+  const scope = dashStudents.filter(s =>
+    (dashProgram === 'all' || s.program_code === dashProgram) &&
+    (dashYear === 'all' || String(s.admission_year) === String(dashYear)));
+
+  // 2) นับสถานะภายในขอบเขต -> การ์ดสรุป
+  const cnt = { risk: 0, watch: 0, normal: 0 };
+  scope.forEach(s => { cnt[s.risk_status.level] = (cnt[s.risk_status.level] || 0) + 1; });
   const summaryEl = document.getElementById('advisor-summary');
   summaryEl.innerHTML = `
-    <div class="stat"><div class="num" style="color:var(--red)">${s.risk||0}</div><div class="lbl">🔴 เสี่ยงรีไทร์</div></div>
-    <div class="stat"><div class="num" style="color:var(--orange-dark)">${s.watch||0}</div><div class="lbl">🟠 เฝ้าระวัง</div></div>
-    <div class="stat"><div class="num" style="color:var(--green)">${s.honors||0}</div><div class="lbl">🟢 เข้าเกณฑ์เกียรตินิยม</div></div>
-    <div class="stat"><div class="num" style="color:var(--muted)">${s.normal||0}</div><div class="lbl">⚪ ปกติ</div></div>`;
-  summaryEl.classList.remove('hidden');
+    <div class="stat filter-tile" data-level="all"><div class="num" style="color:var(--navy)">${scope.length}</div><div class="lbl">👥 ทั้งหมด</div></div>
+    <div class="stat filter-tile" data-level="risk"><div class="num" style="color:var(--red)">${cnt.risk}</div><div class="lbl">🔴 เสี่ยงรีไทร์</div></div>
+    <div class="stat filter-tile" data-level="watch"><div class="num" style="color:var(--orange-dark)">${cnt.watch}</div><div class="lbl">🟠 เฝ้าระวัง</div></div>
+    <div class="stat filter-tile" data-level="normal"><div class="num" style="color:var(--muted)">${cnt.normal}</div><div class="lbl">⚪ ปกติ</div></div>`;
+  summaryEl.querySelectorAll('.filter-tile').forEach(t => {
+    t.classList.toggle('active', t.dataset.level === dashFilter);
+    t.addEventListener('click', () => { dashFilter = t.dataset.level; renderDash(); });
+  });
 
-  let html = '<div class="section"><h3>นักศึกษาในความดูแล (คลิกเพื่อดู GPA รายเทอม)</h3><div style="overflow-x:auto"><table><thead><tr>' +
-    '<th>รหัส</th><th>ชื่อ</th><th>หลักสูตร</th><th>สาย</th><th>GPAX</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>';
-  for (const st of data.students) {
+  // ตัวเลือก dropdown (จากข้อมูลทั้งหมด)
+  const programs = [...new Set(dashStudents.map(s => s.program_code).filter(Boolean))].sort();
+  const years = [...new Set(dashStudents.map(s => s.admission_year).filter(v => v != null))].sort((a,b) => b - a);
+
+  // 3) แถว = ขอบเขต กรองด้วยสถานะ
+  const rows = scope.filter(s => dashFilter === 'all' || s.risk_status.level === dashFilter);
+
+  let html = '<div class="section"><h3>นักศึกษาในความดูแล (คลิกแถวเพื่อดู GPA รายเทอม)</h3>';
+  html += '<div class="row" style="margin-top:0;margin-bottom:12px;gap:14px">' +
+    `<label class="flt-label">หลักสูตร <select id="flt-program">${opt('all','ทุกหลักสูตร',dashProgram)}${programs.map(p=>opt(p,p,dashProgram)).join('')}</select></label>` +
+    `<label class="flt-label">ปีที่เข้า <select id="flt-year">${opt('all','ทุกปี',dashYear)}${years.map(y=>opt(y,y,dashYear)).join('')}</select></label>` +
+    '</div>';
+  html += '<div class="row" id="dash-filters" style="margin-top:0;margin-bottom:12px">' +
+    FILTERS.map(([lv, lb]) => `<button type="button" class="btn ${dashFilter===lv?'orange':'ghost'}" data-flt="${lv}">${lb}</button>`).join('') +
+    '</div>';
+  html += '<div style="overflow-x:auto"><table><thead><tr>' +
+    '<th>รหัส</th><th>ชื่อ</th><th>หลักสูตร</th><th>สาย</th><th>ปีที่เข้า</th><th>GPAX</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>';
+  if (!rows.length) {
+    html += '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:18px">— ไม่มีนักศึกษาตามเงื่อนไขนี้ —</td></tr>';
+  }
+  for (const st of rows) {
     const rs = st.risk_status;
     const hasTerm = dashTermGpa[st.student_id] && dashTermGpa[st.student_id].length;
     html += `<tr class="${hasTerm?'clickable':''}" data-sid="${st.student_id}" data-name="${escapeHtml(st.name)}">
@@ -789,18 +834,22 @@ function renderDashboard(data) {
       <td>${escapeHtml(st.name)}</td>
       <td>${escapeHtml(st.program_code||'')}</td>
       <td>${escapeHtml(st.module||'—')}</td>
+      <td>${st.admission_year==null?'—':escapeHtml(st.admission_year)}</td>
       <td><b>${st.gpax==null?'—':st.gpax}</b></td>
       <td>${st.credits_earned==null?'—':escapeHtml(st.credits_earned)}</td>
       <td><span class="pill ${rs.color}">${rs.emoji} ${escapeHtml(rs.label)}</span></td>
     </tr>`;
   }
   html += '</tbody></table></div>';
-  html += `<div class="meta" style="margin-top:10px;font-size:11.5px">เกณฑ์ (จากตาราง rules): รีไทร์ &lt; ${th.retire} · เฝ้าระวัง &lt; ${th.probation} · เกียรตินิยม ≥ ${th.honors}</div></div>`;
+  html += `<div class="meta" style="margin-top:10px;font-size:11.5px">เกณฑ์ (จากตาราง rules): 🔴 เสี่ยงรีไทร์ GPAX &lt; ${th.retire} · 🟠 เฝ้าระวัง &lt; ${th.probation} · ⚪ นอกนั้น = ปกติ</div></div>`;
   document.getElementById('advisor-table-wrap').innerHTML = html;
 
-  document.querySelectorAll('#advisor-table-wrap tr.clickable').forEach(tr => {
-    tr.addEventListener('click', () => showTermChart(tr.dataset.sid, tr.dataset.name));
-  });
+  document.getElementById('flt-program').addEventListener('change', e => { dashProgram = e.target.value; renderDash(); });
+  document.getElementById('flt-year').addEventListener('change', e => { dashYear = e.target.value; renderDash(); });
+  document.querySelectorAll('#dash-filters [data-flt]').forEach(b =>
+    b.addEventListener('click', () => { dashFilter = b.dataset.flt; renderDash(); }));
+  document.querySelectorAll('#advisor-table-wrap tr.clickable').forEach(tr =>
+    tr.addEventListener('click', () => showTermChart(tr.dataset.sid, tr.dataset.name)));
 }
 
 function showTermChart(sid, name) {
